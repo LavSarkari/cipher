@@ -309,6 +309,9 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
     setContextMenu({ x: e.clientX, y: e.clientY, msg, isOwn: msg.senderId === me.id });
   };
 
+  const handleReply = (msg) => { setReplyTo(msg); inputRef.current?.focus(); };
+  const handleEdit = (msg) => { setEditingMsg(msg); setInput(msg.plaintext || ""); inputRef.current?.focus(); };
+
 
 
   const displayMessages = messages.map(m => ({ ...m, senderUsername: m.senderId === me.id ? me.username : activeChat.username }));
@@ -566,9 +569,9 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
         {msgGroups.map((g, gi) => (
           <React.Fragment key={gi}>
             {g.newDay && <div className="flex items-center gap-4 px-4 my-4"><div className="flex-1 h-px bg-white/[0.06]" /><span className="text-[11px] font-semibold text-white/30">{formatDateSeparator(g.firstTime)}</span><div className="flex-1 h-px bg-white/[0.06]" /></div>}
-            <MessageItem msg={g.messages[0]} isFirst={true} groupItem={g} />
+            <SharedMessageItem msg={g.messages[0]} isFirst={true} groupItem={g} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} />
             {g.messages.slice(1).map(m => (
-              <MessageItem key={m.id} msg={m} />
+              <SharedMessageItem key={m.id} msg={m} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} />
             ))}
           </React.Fragment>
         ))}
