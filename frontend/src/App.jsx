@@ -33,7 +33,7 @@ const KeyModal = ({ title, onClose, onSubmit }) => {
         </div>
         <input
           className="w-full bg-white/[0.05] border border-white/10 p-4 rounded-xl outline-none text-center text-base tracking-widest focus:border-amber-500/40 transition-all"
-          type="password" autoFocus placeholder="••••••••" value={value}
+          type="password" autoFocus placeholder="••••••••" value={value} autoComplete="off"
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") onSubmit(value); if (e.key === "Escape") onClose(); }}
         />
@@ -239,6 +239,10 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
   const decryptCache = useRef(new Map());
 
   useEffect(() => {
+    decryptCache.current.clear();
+  }, [chatKey]);
+
+  useEffect(() => {
     (async () => {
       if (!isUnlocked || !chatKey) { setMessages(rawMessages.map(m => ({ ...m, plaintext: null }))); return; }
       // Only decrypt messages we haven't seen before
@@ -250,7 +254,6 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
           decryptCache.current.set(m.id, pt);
           return { ...m, plaintext: pt };
         } catch {
-          decryptCache.current.set(m.id, null);
           return { ...m, plaintext: null };
         }
       }));
@@ -408,7 +411,7 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
         )}
         <form onSubmit={send} className={`bg-white/[0.04] rounded-xl px-3 md:px-4 flex items-center border ${replyTo || editingMsg ? 'border-t-0 rounded-t-none' : 'border-white/[0.06]'} focus-within:border-white/10 transition-colors`}>
           {!isUnlocked && <button type="button" onClick={() => setShowKey(true)} className="p-2.5 -ml-1 text-amber-500 active:text-amber-400"><Lock size={20} /></button>}
-          <input ref={inputRef} disabled={!isUnlocked || isSending}
+          <input ref={inputRef} disabled={!isUnlocked || isSending} autoComplete="off"
             className="flex-1 bg-transparent py-3.5 text-[16px] md:text-[15px] outline-none text-white/80 placeholder:text-white/20 disabled:opacity-30"
             placeholder={isUnlocked ? `Message @${activeChat.username}` : "Tap 🔑 to unlock"} value={input} onChange={(e) => setInput(e.target.value)} />
           {isUnlocked && <button type="submit" disabled={!input.trim() || isSending} className="p-2.5 text-white/30 active:text-indigo-400 disabled:opacity-20 transition-colors">
@@ -506,6 +509,10 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
   const decryptCache = useRef(new Map());
 
   useEffect(() => {
+    decryptCache.current.clear();
+  }, [chatKey]);
+
+  useEffect(() => {
     (async () => {
       if (!isUnlocked || !chatKey) { setMessages(rawMessages.map(m => ({ ...m, plaintext: null }))); return; }
       const resolved = await Promise.all(rawMessages.map(async (m) => {
@@ -516,7 +523,6 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
           decryptCache.current.set(m.id, pt);
           return { ...m, plaintext: pt };
         } catch {
-          decryptCache.current.set(m.id, null);
           return { ...m, plaintext: null };
         }
       }));
@@ -647,7 +653,7 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
         )}
         <form onSubmit={send} className={`bg-white/[0.04] rounded-xl px-3 md:px-4 flex items-center border ${replyTo || editingMsg ? 'border-t-0 rounded-t-none' : 'border-white/[0.06]'} focus-within:border-white/10 transition-colors`}>
           {!isUnlocked && <button type="button" onClick={() => setShowKey(true)} className="p-2 -ml-1 text-amber-500"><Lock size={18} /></button>}
-          <input ref={inputRef} disabled={!isUnlocked || isSending}
+          <input ref={inputRef} disabled={!isUnlocked || isSending} autoComplete="off"
             className="flex-1 bg-transparent py-3 text-[15px] outline-none text-white/80 placeholder:text-white/20 disabled:opacity-30"
             placeholder={isUnlocked ? `Message #${activeGroup.name}` : "Enter passkey to unlock"} value={input} onChange={(e) => setInput(e.target.value)} />
           {isUnlocked && <button type="submit" disabled={!input.trim() || isSending} className="p-2 text-white/30 hover:text-indigo-400 disabled:opacity-20">
@@ -805,11 +811,11 @@ const App = () => {
           <form onSubmit={handleAuth} className="space-y-4">
             <div className="relative group">
               <UserIcon size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30 group-focus-within:text-indigo-400 transition-colors" />
-              <input className="w-full bg-white/[0.03] border border-white/[0.06] p-4 pl-11 rounded-xl outline-none text-sm focus:border-indigo-500/50 focus:bg-white/[0.05] transition-all placeholder:text-white/20 shadow-inner" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
+              <input className="w-full bg-white/[0.03] border border-white/[0.06] p-4 pl-11 rounded-xl outline-none text-sm focus:border-indigo-500/50 focus:bg-white/[0.05] transition-all placeholder:text-white/20 shadow-inner" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" />
             </div>
             <div className="relative group">
               <Fingerprint size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30 group-focus-within:text-indigo-400 transition-colors" />
-              <input className="w-full bg-white/[0.03] border border-white/[0.06] p-4 pl-11 rounded-xl outline-none text-sm focus:border-indigo-500/50 focus:bg-white/[0.05] transition-all placeholder:text-white/20 shadow-inner" type="password" placeholder={authMode === "signup" ? "Passcode (min 10 chars)" : "Passcode"} value={password} onChange={(e) => setPassword(e.target.value)} />
+              <input className="w-full bg-white/[0.03] border border-white/[0.06] p-4 pl-11 rounded-xl outline-none text-sm focus:border-indigo-500/50 focus:bg-white/[0.05] transition-all placeholder:text-white/20 shadow-inner" type="password" placeholder={authMode === "signup" ? "Passcode (min 10 chars)" : "Passcode"} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="off" />
             </div>
             {authError && <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-xl flex items-center gap-2 text-red-400 text-xs shadow-sm"><AlertCircle size={14} className="flex-shrink-0" />{authError}</div>}
             <button disabled={isProcessing} className="w-full bg-indigo-600 hover:bg-indigo-500 rounded-xl py-4 pt-[17px] text-sm font-bold text-white shadow-lg shadow-indigo-600/20 transition-all disabled:opacity-50 disabled:shadow-none hover:-translate-y-0.5 active:translate-y-0">
@@ -835,7 +841,7 @@ const App = () => {
         <div className="p-3 pb-2">
           <div className="flex items-center gap-2 bg-white/[0.04] rounded-lg px-3 py-[9px]">
             <Search size={16} className="text-white/20" />
-            <input className="bg-transparent text-[14px] outline-none flex-1 text-white/70 placeholder:text-white/15" placeholder="Find a conversation" value={sidebarFilter} onChange={(e) => setSidebarFilter(e.target.value)} />
+            <input className="bg-transparent text-[14px] outline-none flex-1 text-white/70 placeholder:text-white/15" placeholder="Find a conversation" value={sidebarFilter} onChange={(e) => setSidebarFilter(e.target.value)} autoComplete="off" />
           </div>
         </div>
 
@@ -876,7 +882,7 @@ const App = () => {
           </div>
           {showCreateGroup && (
             <div className="flex gap-1.5 px-2 mb-2">
-              <input autoFocus className="flex-1 bg-white/[0.04] border border-white/[0.06] rounded-md px-2.5 py-1.5 text-sm outline-none text-white/80 placeholder:text-white/20 focus:border-indigo-500/50 focus:bg-white/[0.06] transition-all" placeholder="Group name..." value={groupNameInput} onChange={(e) => setGroupNameInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && createGroup()} />
+              <input autoFocus className="flex-1 bg-white/[0.04] border border-white/[0.06] rounded-md px-2.5 py-1.5 text-sm outline-none text-white/80 placeholder:text-white/20 focus:border-indigo-500/50 focus:bg-white/[0.06] transition-all" placeholder="Group name..." value={groupNameInput} onChange={(e) => setGroupNameInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && createGroup()} autoComplete="off" />
               <button onClick={createGroup} disabled={isCreatingGroup || groupNameInput.trim().length < 2} className="px-2.5 bg-indigo-600 rounded-md text-white hover:bg-indigo-500 disabled:opacity-40 transition-colors flex items-center justify-center min-w-[36px]">
                 {isCreatingGroup ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} strokeWidth={3} />}
               </button>
@@ -1002,7 +1008,7 @@ const App = () => {
                     <h3 className="text-sm font-semibold text-white/80 mb-1">Add Friend</h3>
                     <p className="text-[13px] text-white/25 mb-4">Search users by their username.</p>
                     <div className="flex items-center gap-2 bg-white/[0.04] border border-white/[0.06] rounded-lg px-4 py-3 focus-within:border-indigo-500/40 transition-colors">
-                      <input className="bg-transparent flex-1 text-sm outline-none text-white/80 placeholder:text-white/15" placeholder="Enter a username..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+                      <input className="bg-transparent flex-1 text-sm outline-none text-white/80 placeholder:text-white/15" placeholder="Enter a username..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} autoComplete="off" />
                       <Search size={16} className="text-white/20" />
                     </div>
                   </div>
