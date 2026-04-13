@@ -62,6 +62,9 @@ CREATE TABLE public.messages (
   receiver_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
   ciphertext TEXT NOT NULL,
   iv TEXT NOT NULL,
+  reply_to_id UUID REFERENCES public.messages(id) ON DELETE SET NULL,
+  edited_at TIMESTAMPTZ,
+  reactions JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -72,6 +75,9 @@ CREATE TABLE public.group_messages (
   sender_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
   ciphertext TEXT NOT NULL,
   iv TEXT NOT NULL,
+  reply_to_id UUID REFERENCES public.group_messages(id) ON DELETE SET NULL,
+  edited_at TIMESTAMPTZ,
+  reactions JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -113,10 +119,14 @@ CREATE POLICY "Users can send messages to friends" ON public.messages FOR INSERT
     EXISTS (SELECT 1 FROM public.friendships WHERE (user_id = auth.uid() AND friend_id = receiver_id) OR (user_id = receiver_id AND friend_id = auth.uid()))
   )
 );
+CREATE POLICY "Users can update own messages (edit)" ON public.messages FOR UPDATE TO authenticated USING (auth.uid() = sender_id);
+CREATE POLICY "Users can react to messages" ON public.messages FOR UPDATE TO authenticated USING (auth.uid() = sender_id OR auth.uid() = receiver_id);
 
 -- Group Messages
 CREATE POLICY "Members can see group messages" ON public.group_messages FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM public.group_members WHERE group_id = public.group_messages.group_id AND user_id = auth.uid()));
 CREATE POLICY "Members can send group messages" ON public.group_messages FOR INSERT TO authenticated WITH CHECK (auth.uid() = sender_id AND EXISTS (SELECT 1 FROM public.group_members WHERE group_id = public.group_messages.group_id AND user_id = auth.uid()));
+CREATE POLICY "Members can update own group messages (edit)" ON public.group_messages FOR UPDATE TO authenticated USING (auth.uid() = sender_id AND EXISTS (SELECT 1 FROM public.group_members WHERE group_id = public.group_messages.group_id AND user_id = auth.uid()));
+CREATE POLICY "Members can react to group messages" ON public.group_messages FOR UPDATE TO authenticated USING (EXISTS (SELECT 1 FROM public.group_members WHERE group_id = public.group_messages.group_id AND user_id = auth.uid()));
 
 -- 5. AUTOMATED USER SYNC (CRITICAL)
 -- This function runs whenever a new user signs up via Supabase Auth

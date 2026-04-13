@@ -1,626 +1,673 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertCircle,
-  Bell,
-  ChevronLeft,
-  Fingerprint,
-  Globe,
-  Info,
-  Key,
-  Loader2,
-  LogOut,
-  MessageSquare,
-  Plus,
-  Search,
-  Send,
-  Settings as SettingsIcon,
-  ShieldCheck,
-  Sparkles,
-  User as UserIcon,
-  UserMinus,
-  UserPlus,
-  Users as GroupsIcon,
-  X
+  AlertCircle, Bell, ChevronLeft, Fingerprint, Info, Key, Loader2,
+  LogOut, MessageSquare, Plus, Search, Send, Settings as SettingsIcon,
+  ShieldCheck, Sparkles, User as UserIcon, UserMinus, UserPlus,
+  Users as GroupsIcon, X, AtSign, Hash, Lock, Menu,
+  CornerUpLeft, Edit2, Smile, MoreHorizontal
 } from "lucide-react";
 import { api } from "./lib/api";
 import { decryptMessage, encryptMessage } from "./crypto/e2ee";
+import { formatDiscordTime, formatDateSeparator, groupMessages } from "./lib/helpers";
+import { usePresence, useTypingIndicator } from "./lib/realtime";
 
 const AI_USER = { id: "ai-999", username: "Gemini AI", isAI: true };
 const NOTIFICATION_PREFS_KEY = "vault_notification_prefs";
-const DEFAULT_NOTIFICATION_PREFS = {
-  messages: true,
-  friendRequests: true,
-  groupRequests: true,
-  sounds: true
-};
-
+const DEFAULT_NOTIFICATION_PREFS = { messages: true, friendRequests: true, groupRequests: true, sounds: true };
 const chatIdFor = (a, b) => [a, b].sort().join(":");
-const groupChatIdFor = (groupId) => `group:${groupId}`;
-const garbageFromCipher = (ciphertext = "") =>
-  (ciphertext || "X9aQ2kLmP0rT7wY1nV8b").slice(0, 24).match(/.{1,4}/g)?.join("-") || "X9aQ-2kLm";
+const groupChatIdFor = (gid) => `group:${gid}`;
 
+/* ─── Key Modal ─── */
 const KeyModal = ({ title, onClose, onSubmit }) => {
   const [value, setValue] = useState("");
   return (
-    <div className="absolute inset-0 z-50 bg-black/95 backdrop-blur-3xl flex items-center justify-center p-6 animate-in fade-in duration-500">
-      <div className="bg-white/[0.03] border border-white/10 p-10 rounded-[3rem] w-full max-w-[320px] text-center space-y-8 shadow-2xl relative overflow-hidden group">
-        <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/5 blur-3xl pointer-events-none" />
-        <div className="w-20 h-20 bg-amber-500/10 rounded-[2rem] flex items-center justify-center mx-auto border border-amber-500/20 shadow-inner group-hover:scale-110 transition-transform duration-500">
-          <Key className="text-amber-500/80" size={32} strokeWidth={1.5} />
+    <div className="absolute inset-0 z-50 bg-black/90 backdrop-blur-xl flex items-center justify-center p-6 safe-bottom">
+      <div className="bg-[#1a1a1e] border border-white/10 p-8 rounded-2xl w-full max-w-[340px] text-center space-y-6 shadow-2xl">
+        <div className="w-16 h-16 bg-amber-500/10 rounded-full flex items-center justify-center mx-auto border border-amber-500/20">
+          <Key className="text-amber-500" size={28} />
         </div>
-        <div className="space-y-2">
-          <h3 className="text-[10px] font-black uppercase tracking-[0.5em] text-white/40">{title}</h3>
-          <p className="text-[8px] text-amber-500/50 uppercase font-bold tracking-widest">Verification Required</p>
+        <div>
+          <h3 className="text-xs font-bold uppercase tracking-widest text-white/50">{title}</h3>
+          <p className="text-[11px] text-amber-500/60 mt-1">Enter your shared encryption passkey</p>
         </div>
         <input
-          className="w-full bg-white/[0.03] border border-white/5 p-5 rounded-2xl outline-none text-center text-sm font-medium tracking-[0.2em] focus:border-amber-500/30 focus:bg-white/[0.05] transition-all duration-300 placeholder:text-white/5"
-          type="password"
-          autoFocus
-          placeholder="••••••••"
-          value={value}
+          className="w-full bg-white/[0.05] border border-white/10 p-4 rounded-xl outline-none text-center text-base tracking-widest focus:border-amber-500/40 transition-all"
+          type="password" autoFocus placeholder="••••••••" value={value}
           onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") onSubmit(value);
-            if (e.key === "Escape") onClose();
-          }}
+          onKeyDown={(e) => { if (e.key === "Enter") onSubmit(value); if (e.key === "Escape") onClose(); }}
         />
-        <div className="flex flex-col gap-3">
-          <button
-            onClick={() => onSubmit(value)}
-            className="w-full bg-amber-600 rounded-2xl text-[10px] uppercase tracking-widest font-black py-4 hover:bg-amber-500 transition-all duration-300 shadow-lg shadow-amber-600/10 active:scale-95"
-          >
-            Unlock Protocol
-          </button>
-          <button
-            onClick={onClose}
-            className="w-full text-[9px] uppercase tracking-widest font-black text-white/20 hover:text-white/40 transition-colors py-2"
-          >
-            Abort
-          </button>
+        <div className="flex gap-3">
+          <button onClick={onClose} className="flex-1 py-3.5 rounded-xl text-xs uppercase tracking-widest font-bold text-white/30 active:bg-white/5 transition-colors">Cancel</button>
+          <button onClick={() => onSubmit(value)} className="flex-1 bg-amber-600 rounded-xl py-3.5 text-xs uppercase tracking-widest font-bold active:bg-amber-700 transition-colors">Unlock</button>
         </div>
       </div>
     </div>
   );
 };
 
-const ChatContainer = ({ activeChat, me, onBack, onRemoveFriend }) => {
+/* ─── Shared Components & Hooks ─── */
+const useLongPress = (callback, ms = 400) => {
+  const timer = useRef(null);
+  const start = (e) => { timer.current = setTimeout(() => { callback(e); }, ms); };
+  const stop = () => { clearTimeout(timer.current); };
+  return { onTouchStart: start, onTouchEnd: stop, onTouchMove: stop };
+};
+
+const MessageContextMenu = ({ x, y, msg, isOwn, onClose, onReply, onEdit, onReact }) => {
+  const ref = useRef(null);
+  useEffect(() => {
+    const clk = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
+    document.addEventListener("mousedown", clk);
+    return () => document.removeEventListener("mousedown", clk);
+  }, [onClose]);
+
+  const emojis = ["👍", "❤️", "😂", "🎉", "🔥", "👀"];
+
+  return (
+    <div ref={ref} className="fixed z-[100] bg-[#111214] border border-white/10 rounded-lg shadow-2xl py-2 min-w-[200px]"
+      style={{ top: Math.min(y, window.innerHeight - 200), left: Math.min(x, window.innerWidth - 220) }}>
+      <div className="flex gap-2 px-3 pb-2 border-b border-white/5 mb-1">
+        {emojis.map(e => (
+          <button key={e} onClick={() => { onReact(msg, e); onClose(); }} className="text-xl p-1.5 hover:bg-white/10 rounded-md transition-colors active:scale-95">{e}</button>
+        ))}
+      </div>
+      <button onClick={() => { onReply(msg); onClose(); }} className="w-full flex items-center gap-3 px-3 py-2 text-sm text-white/80 hover:bg-indigo-500/20 hover:text-indigo-300">
+        <CornerUpLeft size={16} /> Reply
+      </button>
+      {isOwn && (
+        <button onClick={() => { onEdit(msg); onClose(); }} className="w-full flex items-center gap-3 px-3 py-2 text-sm text-white/80 hover:bg-indigo-500/20 hover:text-indigo-300">
+          <Edit2 size={16} /> Edit Message
+        </button>
+      )}
+      <button onClick={() => { navigator.clipboard.writeText(msg.plaintext || ""); onClose(); }} className="w-full flex items-center gap-3 px-3 py-2 text-sm text-white/80 hover:bg-white/10">
+        <MessageSquare size={16} /> Copy Text
+      </button>
+    </div>
+  );
+};
+
+/* ─── DM Chat Panel ─── */
+const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
   const [rawMessages, setRawMessages] = useState([]);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [chatKey, setChatKey] = useState("");
   const [isUnlocked, setIsUnlocked] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   const scrollRef = useRef(null);
-
+  const inputRef = useRef(null);
   const chatId = useMemo(() => chatIdFor(me.id, activeChat.id), [me.id, activeChat.id]);
 
   useEffect(() => {
+    setRawMessages([]); setMessages([]); setIsUnlocked(false); setChatKey(""); setInput("");
+  }, [activeChat.id]);
+
+  useEffect(() => {
     if (activeChat.isAI) {
-      const stored = localStorage.getItem(`vault_ai_${me.id}`) || "[]";
-      try {
-        setRawMessages(JSON.parse(stored));
-      } catch {
-        setRawMessages([]);
-      }
+      try { setRawMessages(JSON.parse(localStorage.getItem(`vault_ai_${me.id}`) || "[]")); } catch { setRawMessages([]); }
       return;
     }
-
     let stopped = false;
     const load = async () => {
       try {
         const res = await api.messages(activeChat.id);
-        if (!stopped) {
-          setRawMessages(prev => {
-            const existingIds = new Set(prev.map(m => m.id));
-            const newMessages = (res.messages || []).filter(m => !existingIds.has(m.id));
-            return newMessages.length > 0 ? [...prev, ...newMessages] : prev;
-          });
-        }
-      } catch {
-        // Silent fail to maintain history
-      }
+        if (!stopped) setRawMessages(prev => {
+          const ids = new Set(prev.map(m => m.id));
+          const fresh = (res.messages || []).filter(m => !ids.has(m.id));
+          return fresh.length ? [...prev, ...fresh] : prev;
+        });
+      } catch {}
     };
-
     load();
-    const id = setInterval(load, 2000);
-    return () => {
-      stopped = true;
-      clearInterval(id);
-    };
+    const id = setInterval(load, 3000);
+    return () => { stopped = true; clearInterval(id); };
   }, [activeChat.id, activeChat.isAI, me.id]);
 
+  const { typingUsers, sendTypingEvent } = useTypingIndicator(chatId, me);
+  const [contextMenu, setContextMenu] = useState(null);
+  const [replyTo, setReplyTo] = useState(null);
+  const [editingMsg, setEditingMsg] = useState(null);
+
   useEffect(() => {
-    const decryptAll = async () => {
-      if (!isUnlocked || !chatKey) {
-        setMessages(rawMessages.map((m) => ({ ...m, plaintext: null })));
-        return;
-      }
-      const resolved = await Promise.all(
-        rawMessages.map(async (m) => {
-          try {
-            const plaintext = await decryptMessage({
-              ciphertext: m.ciphertext,
-              iv: m.iv,
-              passphrase: chatKey,
-              chatId
-            });
-            return { ...m, plaintext };
-          } catch {
-            return { ...m, plaintext: garbageFromCipher(m.ciphertext) };
-          }
-        })
-      );
+    if (!activeChat.isAI) sendTypingEvent(input.length > 0);
+  }, [input]);
+
+  const decryptCache = useRef(new Map());
+
+  useEffect(() => {
+    (async () => {
+      if (!isUnlocked || !chatKey) { setMessages(rawMessages.map(m => ({ ...m, plaintext: null }))); return; }
+      // Only decrypt messages we haven't seen before
+      const resolved = await Promise.all(rawMessages.map(async (m) => {
+        const cached = decryptCache.current.get(m.id);
+        if (cached !== undefined) return { ...m, plaintext: cached };
+        try {
+          const pt = await decryptMessage({ ciphertext: m.ciphertext, iv: m.iv, passphrase: chatKey, chatId });
+          decryptCache.current.set(m.id, pt);
+          return { ...m, plaintext: pt };
+        } catch {
+          decryptCache.current.set(m.id, null);
+          return { ...m, plaintext: null };
+        }
+      }));
       setMessages(resolved);
-    };
-    decryptAll();
+    })();
   }, [rawMessages, isUnlocked, chatKey, chatId]);
 
   useEffect(() => {
-    if (!scrollRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
-    
-    if (isAtBottom) {
-      scrollRef.current.scrollTo({
-        top: scrollRef.current.scrollHeight,
-        behavior: "smooth"
-      });
+    if (scrollRef.current) {
+      const el = scrollRef.current;
+      if (el.scrollHeight - el.scrollTop - el.clientHeight < 150) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     }
   }, [messages]);
 
-    const [isSending, setIsSending] = useState(false);
-    const inputRef = useRef(null);
+  const send = async (e) => {
+    e.preventDefault();
+    if (!input.trim() || !isUnlocked || !chatKey || isSending) return;
+    setIsSending(true);
 
-    const send = async (e) => {
-      e.preventDefault();
-      if (!input.trim() || !isUnlocked || !chatKey || isSending) return;
+    try {
+      if (editingMsg) {
+        const payload = await encryptMessage({ plaintext: input.trim(), passphrase: chatKey, chatId });
+        await api.editMessage(editingMsg.id, payload);
+        const newMsg = { ...editingMsg, plaintext: input.trim(), ciphertext: payload.ciphertext, iv: payload.iv, edited_at: new Date().toISOString() };
+        setMessages(p => p.map(m => m.id === newMsg.id ? newMsg : m));
+        setRawMessages(p => p.map(m => m.id === newMsg.id ? newMsg : m));
+        setEditingMsg(null); setInput(""); return;
+      }
 
-      setIsSending(true);
-      const payload = await encryptMessage({
-        plaintext: input.trim(),
-        passphrase: chatKey,
-        chatId
-      });
+      const payload = await encryptMessage({ plaintext: input.trim(), passphrase: chatKey, chatId });
 
       if (activeChat.isAI) {
         const now = Date.now();
-        const self = {
-          id: `local_${now}`,
-          senderId: me.id,
-          receiverId: AI_USER.id,
-          ...payload,
-          timestamp: now
-        };
-
-        setRawMessages(prev => [...prev, self]);
-        setInput("");
-        setIsSending(false);
-        inputRef.current?.focus();
-
-        // Simulate AI Thinking
+        setRawMessages(prev => [...prev, { id: `local_${now}`, senderId: me.id, receiverId: AI_USER.id, ...payload, timestamp: now }]);
+        setInput(""); setIsSending(false); inputRef.current?.focus();
         setTimeout(async () => {
-          const aiPayload = await encryptMessage({
-            plaintext: "AI relay active. Secure channel received. Analyzing tactical data stream...",
-            passphrase: chatKey,
-            chatId
-          });
-
-          const aiReply = {
-            id: `local_${Date.now()}`,
-            senderId: AI_USER.id,
-            receiverId: me.id,
-            ...aiPayload,
-            timestamp: Date.now()
-          };
-
-          setRawMessages(prev => {
-            const next = [...prev, aiReply];
-            localStorage.setItem(`vault_ai_${me.id}`, JSON.stringify(next));
-            return next;
-          });
+          const aiP = await encryptMessage({ plaintext: "AI relay active. Secure channel received.", passphrase: chatKey, chatId });
+          setRawMessages(prev => { const next = [...prev, { id: `local_${Date.now()}`, senderId: AI_USER.id, receiverId: me.id, ...aiP, timestamp: Date.now() }]; localStorage.setItem(`vault_ai_${me.id}`, JSON.stringify(next)); return next; });
         }, 1000 + Math.random() * 1000);
         return;
       }
 
-      try {
-        const res = await api.sendMessage(activeChat.id, payload);
-        setRawMessages((prev) => [...prev, res.message]);
-        setInput("");
-        inputRef.current?.focus();
-      } catch (err) {
-        alert("Failed to transmit: " + (err.message || "Unknown error"));
-      } finally {
-        setIsSending(false);
+      const res = await api.sendMessage(activeChat.id, payload, replyTo?.id);
+      setRawMessages(prev => [...prev, res.message]);
+      setInput(""); setReplyTo(null); inputRef.current?.focus();
+    } catch (err) { alert("Failed: " + (err.message || "Unknown error")); }
+    finally { setIsSending(false); }
+  };
+
+  const handleReact = async (msg, emoji) => {
+    try {
+      const reacts = msg.reactions || {};
+      const usrs = reacts[emoji] || [];
+      const isReacted = usrs.includes(me.id);
+      const newUsrs = isReacted ? usrs.filter(u => u !== me.id) : [...usrs, me.id];
+      const newReacts = { ...reacts, [emoji]: newUsrs };
+      if (newUsrs.length === 0) delete newReacts[emoji];
+      
+      await api.reactToMessage(msg.id, newReacts);
+      const newMsg = { ...msg, reactions: newReacts };
+      setMessages(p => p.map(m => m.id === msg.id ? newMsg : m));
+      setRawMessages(p => p.map(m => m.id === msg.id ? newMsg : m));
+    } catch (err) { console.error("Reaction failed"); }
+  };
+
+  const handleContextMenu = (e, msg) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, msg, isOwn: msg.senderId === me.id });
+  };
+
+  const MessageItem = ({ msg, isFirst, groupItem }) => {
+    const longPress = useLongPress((e) => {
+      // Get touch clientX/Y
+      const touch = e.touches?.[0];
+      if (touch) setContextMenu({ x: touch.clientX, y: touch.clientY, msg, isOwn: msg.senderId === me.id });
+    });
+
+    let lastTap = 0;
+    const handleTap = (e) => {
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        setReplyTo(msg); inputRef.current?.focus();
       }
+      lastTap = now;
     };
 
-  return (
-    <div className="h-full flex flex-col bg-black animate-in slide-in-from-right-8 duration-700 relative z-20">
-      <div className="p-5 border-b border-white/[0.03] flex items-center justify-between bg-black/80 backdrop-blur-3xl shadow-2xl relative z-10">
-        <button onClick={onBack} className="p-2 text-white/30 hover:text-white transition-all duration-300 hover:bg-white/[0.05] rounded-xl group">
-          <ChevronLeft className="group-hover:-translate-x-1 transition-transform" />
-        </button>
-        <div className="text-center">
-          <span className="text-[10px] font-black uppercase tracking-[0.4em] block text-white/90">
-            @{activeChat.username}
-          </span>
-          <div className="flex items-center justify-center gap-2 mt-1">
-            <div className={`w-1 h-1 rounded-full ${isUnlocked ? "bg-green-500 shadow-[0_0_5px_rgba(34,197,94,0.5)]" : "bg-amber-500 shadow-[0_0_5px_rgba(245,158,11,0.5)]"}`} />
-            <span className={`text-[7px] font-black uppercase tracking-[0.25em] ${isUnlocked ? "text-green-500/80" : "text-amber-500/80"}`}>
-              {isUnlocked ? "Decrypted Link" : "Secure Payload Locked"}
-            </span>
-          </div>
-        </div>
-        <div className="flex items-center gap-1">
-          {!activeChat.isAI && (
-            <button
-              onClick={() => onRemoveFriend?.(activeChat.id)}
-              className="p-2 text-white/20 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all duration-300"
-              title="Terminate Link"
-            >
-              <UserMinus size={18} strokeWidth={1.5} />
-            </button>
-          )}
-          <button
-            onClick={() => setShowKey(true)}
-            className={`p-2 rounded-xl transition-all duration-500 ${isUnlocked ? "text-green-500 bg-green-500/5 hover:bg-green-500/10" : "text-amber-500 bg-amber-500/5 hover:bg-amber-500/10 animate-pulse"}`}
-            title="Protocol Passkey"
-          >
-            <Key size={18} strokeWidth={1.5} />
-          </button>
-        </div>
-      </div>
+    const isOwn = msg.senderId === me.id;
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar relative">
-        <div className="absolute top-0 inset-x-0 h-32 bg-gradient-to-b from-black to-transparent pointer-events-none z-0 opacity-10" />
-        {messages.map((m) => (
-          <div key={m.id} className={`flex ${m.senderId === me.id ? "justify-end" : "justify-start"} animate-in fade-in slide-in-from-bottom-2 duration-500`}>
-            <div
-              className={`p-4 px-5 rounded-[1.75rem] max-w-[85%] text-sm font-medium leading-[1.6] shadow-2xl relative group ${
-                m.senderId === me.id
-                  ? "bg-indigo-600 text-white rounded-tr-none"
-                  : "bg-white/[0.03] border border-white/5 text-white/80 rounded-tl-none backdrop-blur-sm"
-              }`}
-            >
-              {isUnlocked ? (
-                m.plaintext
-              ) : (
-                <div className="flex flex-col gap-1.5 opacity-40">
-                  <div className="h-2 w-32 bg-white/20 rounded-full animate-pulse" />
-                  <div className="h-2 w-24 bg-white/20 rounded-full animate-pulse delay-75" />
-                  <span className="text-[7px] text-white/40 uppercase tracking-[0.2em] font-black mt-1">Payload Encrypted</span>
-                </div>
-              )}
-              <div className={`absolute bottom-[-18px] text-[6px] font-black uppercase tracking-widest text-white/10 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap ${m.senderId === me.id ? "right-1" : "left-1"}`}>
-                {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • Secure Channel
-              </div>
+    // Optional reply banner if replying to a message
+    const replyBanner = isFirst && msg.replyTo && (
+      <div className="flex items-center gap-1 text-[11px] text-white/40 mb-1 ml-13 mr-4 truncate relative">
+        <div className="absolute -left-7 top-1/2 w-6 h-4 border-l-2 border-t-2 border-white/20 rounded-tl-lg" />
+        <span className="font-semibold text-white/60">@{msg.replyTo.senderUsername}</span>
+        <span className="truncate">{activeChat.isAI ? "AI msg fallback" : "Encrypted referenced message"}</span>
+      </div>
+    );
+
+    return (
+      <div className={`group/msg relative pt-0.5 hover:bg-white/[0.02] ${isFirst ? 'mt-[17px]' : ''}`} 
+           onContextMenu={(e) => handleContextMenu(e, msg)} {...longPress} onTouchEnd={handleTap} onClick={handleTap}>
+        
+        {/* Reply arrow if someone replied */}
+        {replyBanner}
+
+        <div className="flex gap-4 px-4 py-0.5">
+          {isFirst ? (
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold flex-shrink-0 mt-0.5 ${isOwn ? 'bg-indigo-600/20 text-indigo-400' : 'bg-white/[0.08] text-white/40'}`}>
+              {groupItem.senderUsername?.[0]?.toUpperCase() || '?'}
             </div>
+          ) : (
+            <div className="w-10 flex-shrink-0 flex items-center justify-center">
+              <span className="text-[10px] text-transparent group-hover/msg:text-white/20 font-mono transition-colors">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+            </div>
+          )}
+
+          <div className="flex-1 min-w-0">
+            {isFirst && (
+              <div className="flex items-baseline gap-2">
+                <span className={`font-semibold text-sm ${isOwn ? 'text-indigo-400' : 'text-white/90'}`}>{groupItem.senderUsername}</span>
+                <span className="text-[11px] text-white/20">{formatDiscordTime(groupItem.firstTime)}</span>
+              </div>
+            )}
+            
+            <p className="text-[15px] text-white/[0.75] leading-[1.625] mt-0.5">
+              {isUnlocked && msg.plaintext ? msg.plaintext : <span className="italic text-white/20">🔒 Encrypted{msg.id ? ' message' : ''}</span>}
+              {msg.edited_at && <span className="text-[10px] text-white/30 ml-2">(edited)</span>}
+            </p>
+
+            {/* Reactions */}
+            {msg.reactions && Object.keys(msg.reactions).length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1">
+                {Object.entries(msg.reactions).map(([emoji, users]) => (
+                  <button key={emoji} onClick={(e) => { e.stopPropagation(); handleReact(msg, emoji); }} className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] border ${users.includes(me.id) ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300' : 'bg-white/5 border-white/10 text-white/60'} hover:bg-white/10 transition-colors`}>
+                    <span>{emoji}</span>
+                    <span className="font-bold">{users.length}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-        ))}
+          
+          {/* Quick Actions (Desktop only) */}
+          <div className="absolute right-4 -top-2 hidden group-hover/msg:flex md:flex opacity-0 group-hover/msg:opacity-100 items-center bg-[#1a1a1e] border border-white/10 rounded-md shadow-lg overflow-hidden transition-opacity">
+            <button onClick={(e) => { e.stopPropagation(); setReplyTo(msg); inputRef.current?.focus(); }} className="p-2 text-white/50 hover:bg-white/10 hover:text-white transition-colors"><CornerUpLeft size={16} /></button>
+            {isOwn && <button onClick={(e) => { e.stopPropagation(); setEditingMsg(msg); setInput(msg.plaintext || ""); inputRef.current?.focus(); }} className="p-2 text-white/50 hover:bg-white/10 hover:text-white transition-colors"><Edit2 size={16} /></button>}
+            <button onClick={(e) => { e.stopPropagation(); handleContextMenu(e, msg); }} className="p-2 text-white/50 hover:bg-white/10 hover:text-white transition-colors"><MoreHorizontal size={16} /></button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const displayMessages = messages.map(m => ({ ...m, senderUsername: m.senderId === me.id ? me.username : activeChat.username }));
+  const msgGroups = groupMessages(displayMessages);
+
+  return (
+    <div className="h-full flex flex-col relative mobile-view-transition">
+      {/* Header */}
+      <div className="h-13 md:h-12 border-b border-white/[0.06] flex items-center px-3 md:px-4 gap-2 md:gap-3 flex-shrink-0 bg-[#0c0c0e] safe-top">
+        <button onClick={onBack} className="md:hidden p-2.5 -ml-1 text-white/50 active:text-white active:bg-white/5 rounded-xl transition-colors"><ChevronLeft size={22} /></button>
+        <AtSign size={18} className="text-white/30 hidden md:block" />
+        <span className="font-semibold text-[15px] text-white/90 truncate">{activeChat.username}</span>
+        <div className="flex-1" />
+        <div className="hidden sm:flex items-center gap-1.5 text-[10px] mr-2">
+          <div className={`w-1.5 h-1.5 rounded-full ${isUnlocked ? 'bg-green-500' : 'bg-amber-500 animate-pulse'}`} />
+          <span className={isUnlocked ? 'text-green-500/70' : 'text-amber-500/70'}>{isUnlocked ? 'Decrypted' : 'Encrypted'}</span>
+        </div>
+        <button onClick={() => setShowKey(true)} className={`p-2.5 rounded-xl transition-colors active:bg-white/5 ${isUnlocked ? 'text-green-500/50' : 'text-amber-500'}`}><Key size={18} /></button>
+        {!activeChat.isAI && <button onClick={() => onRemoveFriend?.(activeChat.id)} className="p-2.5 rounded-xl text-white/20 active:text-red-400 active:bg-red-500/10 transition-colors"><UserMinus size={18} /></button>}
       </div>
 
-      <form onSubmit={send} className="p-6 pb-10 bg-black/80 backdrop-blur-3xl flex gap-3 border-t border-white/[0.03] relative z-20">
-        <div className="flex-1 relative group">
-          <input
-            ref={inputRef}
-            disabled={!isUnlocked || isSending}
-            className="w-full bg-white/[0.03] border border-white/5 p-4 pr-12 rounded-[1.25rem] outline-none text-sm font-medium focus:border-indigo-500/30 focus:bg-white/[0.05] transition-all duration-300 disabled:opacity-30 placeholder:text-white/10"
-            placeholder={isUnlocked ? (isSending ? "Transmitting..." : "Transmit message...") : "Link locked. Enter passkey."}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-          />
-          {isUnlocked && (
-            <button
-              type="submit"
-              disabled={isSending}
-              className={`absolute right-2 top-1/2 -translate-y-1/2 p-2.5 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-600/20 hover:bg-indigo-500 transition-all hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100 ${isSending ? "animate-pulse" : ""}`}
-            >
-              {isSending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} strokeWidth={2.5} />}
-            </button>
-          )}
+      {/* Messages */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto discord-scrollbar">
+        <div className="px-4 pt-8 pb-4">
+          <div className={`w-20 h-20 rounded-full flex items-center justify-center mb-4 text-3xl font-bold ${activeChat.isAI ? 'bg-indigo-600/20 text-indigo-400' : 'bg-white/[0.08] text-white/40'}`}>
+            {activeChat.isAI ? <Sparkles size={36} /> : activeChat.username[0].toUpperCase()}
+          </div>
+          <h2 className="text-xl font-bold text-white">{activeChat.username}</h2>
+          <p className="text-sm text-white/30 mt-1">This is the beginning of your direct message history with <strong className="text-white/50">@{activeChat.username}</strong>.</p>
+          {!isUnlocked && <p className="text-xs text-amber-500/60 mt-2 flex items-center gap-1.5"><Lock size={12} /> Messages are end-to-end encrypted. Enter your passkey to decrypt.</p>}
+          <div className="h-px bg-white/[0.06] mt-6" />
         </div>
-      </form>
+        {msgGroups.map((g, gi) => (
+          <React.Fragment key={gi}>
+            {g.newDay && <div className="flex items-center gap-4 px-4 my-4"><div className="flex-1 h-px bg-white/[0.06]" /><span className="text-[11px] font-semibold text-white/30">{formatDateSeparator(g.firstTime)}</span><div className="flex-1 h-px bg-white/[0.06]" /></div>}
+            <MessageItem msg={g.messages[0]} isFirst={true} groupItem={g} />
+            {g.messages.slice(1).map(m => (
+              <MessageItem key={m.id} msg={m} />
+            ))}
+          </React.Fragment>
+        ))}
+        {typingUsers.length > 0 && (
+          <div className="px-4 py-2 flex items-center gap-2">
+            <div className="flex gap-1">
+              <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+            <span className="text-xs font-semibold text-white/40">{typingUsers.join(", ")} {typingUsers.length > 1 ? "are" : "is"} typing...</span>
+          </div>
+        )}
+        <div className="h-6" />
+      </div>
 
-      {showKey && (
-        <KeyModal
-          title="Shard Passkey"
-          onClose={() => setShowKey(false)}
-          onSubmit={(k) => {
-            setChatKey(k);
-            setIsUnlocked(true);
-            setShowKey(false);
-          }}
+      {/* Input */}
+      <div className="px-3 md:px-4 pb-5 md:pb-6 pt-2 flex-shrink-0 safe-bottom">
+        {(replyTo || editingMsg) && (
+          <div className="mb-2 bg-indigo-500/10 border border-indigo-500/20 rounded-t-xl px-4 py-2 flex items-center justify-between text-xs text-indigo-300">
+            <div className="flex items-center gap-2 truncate">
+              {replyTo ? <CornerUpLeft size={14} /> : <Edit2 size={14} />}
+              <span className="font-semibold">{replyTo ? `Replying to ${replyTo.senderUsername}` : "Editing Message"}</span>
+            </div>
+            <button onClick={() => { setReplyTo(null); setEditingMsg(null); setInput(""); }} className="p-1 hover:bg-white/10 rounded-full"><X size={14} /></button>
+          </div>
+        )}
+        <form onSubmit={send} className={`bg-white/[0.04] rounded-xl px-3 md:px-4 flex items-center border ${replyTo || editingMsg ? 'border-t-0 rounded-t-none' : 'border-white/[0.06]'} focus-within:border-white/10 transition-colors`}>
+          {!isUnlocked && <button type="button" onClick={() => setShowKey(true)} className="p-2.5 -ml-1 text-amber-500 active:text-amber-400"><Lock size={20} /></button>}
+          <input ref={inputRef} disabled={!isUnlocked || isSending}
+            className="flex-1 bg-transparent py-3.5 text-[16px] md:text-[15px] outline-none text-white/80 placeholder:text-white/20 disabled:opacity-30"
+            placeholder={isUnlocked ? `Message @${activeChat.username}` : "Tap 🔑 to unlock"} value={input} onChange={(e) => setInput(e.target.value)} />
+          {isUnlocked && <button type="submit" disabled={!input.trim() || isSending} className="p-2.5 text-white/30 active:text-indigo-400 disabled:opacity-20 transition-colors">
+            {isSending ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}
+          </button>}
+        </form>
+      </div>
+      {showKey && <KeyModal title="Encryption Key" onClose={() => setShowKey(false)} onSubmit={(k) => { setChatKey(k); setIsUnlocked(true); setShowKey(false); }} />}
+      {contextMenu && (
+        <MessageContextMenu 
+          {...contextMenu} 
+          onClose={() => setContextMenu(null)}
+          onReact={handleReact}
+          onReply={(msg) => { setReplyTo(msg); inputRef.current?.focus(); }}
+          onEdit={(msg) => { setEditingMsg(msg); setInput(msg.plaintext || ""); inputRef.current?.focus(); }}
         />
       )}
     </div>
   );
 };
 
-const GroupChatContainer = ({ activeGroup, me, onBack, onExitGroup }) => {
+/* ─── Group Chat Panel ─── */
+const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
   const [rawMessages, setRawMessages] = useState([]);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [showKey, setShowKey] = useState(false);
-  const [showAddFriend, setShowAddFriend] = useState(false);
-  const [addableFriends, setAddableFriends] = useState([]);
-  const [loadingFriendOptions, setLoadingFriendOptions] = useState(false);
-  const [addingFriendId, setAddingFriendId] = useState("");
   const [chatKey, setChatKey] = useState("");
   const [isUnlocked, setIsUnlocked] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [showAddFriend, setShowAddFriend] = useState(false);
+  const [addableFriends, setAddableFriends] = useState([]);
+  const [loadingFriends, setLoadingFriends] = useState(false);
+  const [addingId, setAddingId] = useState("");
   const scrollRef = useRef(null);
-
+  const inputRef = useRef(null);
   const chatId = useMemo(() => groupChatIdFor(activeGroup.id), [activeGroup.id]);
+
+  useEffect(() => { setRawMessages([]); setMessages([]); setIsUnlocked(false); setChatKey(""); setInput(""); }, [activeGroup.id]);
 
   useEffect(() => {
     let stopped = false;
     const load = async () => {
       try {
         const res = await api.groupMessages(activeGroup.id);
-        if (!stopped) {
-          setRawMessages(prev => {
-            const existingIds = new Set(prev.map(m => m.id));
-            const newMessages = (res.messages || []).filter(m => !existingIds.has(m.id));
-            return newMessages.length > 0 ? [...prev, ...newMessages] : prev;
-          });
-        }
-      } catch {
-        if (!stopped) setRawMessages([]);
-      }
+        if (!stopped) setRawMessages(prev => { const ids = new Set(prev.map(m => m.id)); const f = (res.messages || []).filter(m => !ids.has(m.id)); return f.length ? [...prev, ...f] : prev; });
+      } catch { if (!stopped) setRawMessages([]); }
     };
-    load();
-    const id = setInterval(load, 2000);
-    return () => {
-      stopped = true;
-      clearInterval(id);
-    };
+    load(); const id = setInterval(load, 3000);
+    return () => { stopped = true; clearInterval(id); };
   }, [activeGroup.id]);
 
+  const { typingUsers, sendTypingEvent } = useTypingIndicator(chatId, me);
+  const [contextMenu, setContextMenu] = useState(null);
+  const [replyTo, setReplyTo] = useState(null);
+  const [editingMsg, setEditingMsg] = useState(null);
+
   useEffect(() => {
-    const decryptAll = async () => {
-      if (!isUnlocked || !chatKey) {
-        setMessages(rawMessages.map((m) => ({ ...m, plaintext: null })));
-        return;
-      }
-      const resolved = await Promise.all(
-        rawMessages.map(async (m) => {
-          try {
-            const plaintext = await decryptMessage({
-              ciphertext: m.ciphertext,
-              iv: m.iv,
-              passphrase: chatKey,
-              chatId
-            });
-            return { ...m, plaintext };
-          } catch {
-            return { ...m, plaintext: garbageFromCipher(m.ciphertext) };
-          }
-        })
-      );
+    sendTypingEvent(input.length > 0);
+  }, [input]);
+
+  const decryptCache = useRef(new Map());
+
+  useEffect(() => {
+    (async () => {
+      if (!isUnlocked || !chatKey) { setMessages(rawMessages.map(m => ({ ...m, plaintext: null }))); return; }
+      const resolved = await Promise.all(rawMessages.map(async (m) => {
+        const cached = decryptCache.current.get(m.id);
+        if (cached !== undefined) return { ...m, plaintext: cached };
+        try {
+          const pt = await decryptMessage({ ciphertext: m.ciphertext, iv: m.iv, passphrase: chatKey, chatId });
+          decryptCache.current.set(m.id, pt);
+          return { ...m, plaintext: pt };
+        } catch {
+          decryptCache.current.set(m.id, null);
+          return { ...m, plaintext: null };
+        }
+      }));
       setMessages(resolved);
-    };
-    decryptAll();
+    })();
   }, [rawMessages, isUnlocked, chatKey, chatId]);
 
-  useEffect(() => {
-    if (!scrollRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
-    
-    if (isAtBottom) {
-      scrollRef.current.scrollTo({
-        top: scrollRef.current.scrollHeight,
-        behavior: "smooth"
-      });
-    }
-  }, [messages]);
-
-  const [isSending, setIsSending] = useState(false);
-  const inputRef = useRef(null);
+  useEffect(() => { if (scrollRef.current) { const el = scrollRef.current; if (el.scrollHeight - el.scrollTop - el.clientHeight < 150) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" }); } }, [messages]);
 
   const send = async (e) => {
     e.preventDefault();
     if (!input.trim() || !isUnlocked || !chatKey || isSending) return;
-
     setIsSending(true);
-    const payload = await encryptMessage({
-      plaintext: input.trim(),
-      passphrase: chatKey,
-      chatId
+    
+    try {
+      if (editingMsg) {
+        const payload = await encryptMessage({ plaintext: input.trim(), passphrase: chatKey, chatId });
+        await api.editGroupMessage(editingMsg.id, payload);
+        const newMsg = { ...editingMsg, plaintext: input.trim(), ciphertext: payload.ciphertext, iv: payload.iv, edited_at: new Date().toISOString() };
+        setMessages(p => p.map(m => m.id === newMsg.id ? newMsg : m));
+        setRawMessages(p => p.map(m => m.id === newMsg.id ? newMsg : m));
+        setEditingMsg(null); setInput(""); return;
+      }
+
+      const payload = await encryptMessage({ plaintext: input.trim(), passphrase: chatKey, chatId });
+      const res = await api.sendGroupMessage(activeGroup.id, payload, replyTo?.id);
+      setRawMessages(prev => [...prev, { ...res.message, senderUsername: me.username }]);
+      setInput(""); setReplyTo(null); inputRef.current?.focus();
+    } catch {} finally { setIsSending(false); }
+  };
+
+  const handleReact = async (msg, emoji) => {
+    try {
+      const reacts = msg.reactions || {};
+      const usrs = reacts[emoji] || [];
+      const isReacted = usrs.includes(me.id);
+      const newUsrs = isReacted ? usrs.filter(u => u !== me.id) : [...usrs, me.id];
+      const newReacts = { ...reacts, [emoji]: newUsrs };
+      if (newUsrs.length === 0) delete newReacts[emoji];
+      
+      await api.reactToGroupMessage(msg.id, newReacts);
+      const newMsg = { ...msg, reactions: newReacts };
+      setMessages(p => p.map(m => m.id === msg.id ? newMsg : m));
+      setRawMessages(p => p.map(m => m.id === msg.id ? newMsg : m));
+    } catch (err) {}
+  };
+
+  const handleContextMenu = (e, msg) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, msg, isOwn: msg.senderId === me.id });
+  };
+
+  const MessageItem = ({ msg, isFirst, groupItem }) => {
+    const longPress = useLongPress((e) => {
+      const touch = e.touches?.[0];
+      if (touch) setContextMenu({ x: touch.clientX, y: touch.clientY, msg, isOwn: msg.senderId === me.id });
     });
 
-    try {
-      const res = await api.sendGroupMessage(activeGroup.id, payload);
-      setRawMessages((prev) => [
-        ...prev,
-        { ...res.message, senderUsername: me.username }
-      ]);
-      setInput("");
-      inputRef.current?.focus();
-    } catch {
-    } finally {
-      setIsSending(false);
-    }
-  };
+    let lastTap = 0;
+    const handleTap = () => {
+      const now = Date.now();
+      if (now - lastTap < 300) { setReplyTo(msg); inputRef.current?.focus(); }
+      lastTap = now;
+    };
 
-  const openAddFriendModal = async () => {
-    setShowAddFriend(true);
-    setLoadingFriendOptions(true);
-    try {
-      const res = await api.groupFriendOptions(activeGroup.id);
-      setAddableFriends(res.friends || []);
-    } catch {
-      setAddableFriends([]);
-    } finally {
-      setLoadingFriendOptions(false);
-    }
-  };
+    const isOwn = msg.senderId === me.id;
 
-  const addFriendToGroup = async (friendId) => {
-    setAddingFriendId(friendId);
-    try {
-      await api.addFriendToGroup(activeGroup.id, friendId);
-      setAddableFriends((prev) => prev.filter((f) => f.id !== friendId));
-    } catch {
-    } finally {
-      setAddingFriendId("");
-    }
-  };
-
-  return (
-    <div className="h-full flex flex-col bg-black animate-in slide-in-from-right-8 duration-700 relative z-20">
-      <div className="p-5 border-b border-white/[0.03] flex items-center justify-between bg-black/80 backdrop-blur-3xl shadow-2xl relative z-10">
-        <button onClick={onBack} className="p-2 text-white/30 hover:text-white transition-all duration-300 hover:bg-white/[0.05] rounded-xl group">
-          <ChevronLeft className="group-hover:-translate-x-1 transition-transform" />
-        </button>
-        <div className="text-center">
-          <span className="text-[10px] font-black uppercase tracking-[0.4em] block text-white/90">
-            #{activeGroup.name}
-          </span>
-          <div className="flex items-center justify-center gap-2 mt-1">
-            <div className={`w-1 h-1 rounded-full ${isUnlocked ? "bg-green-500 shadow-[0_0_5px_rgba(34,197,94,0.5)]" : "bg-amber-500 shadow-[0_0_5px_rgba(245,158,11,0.5)]"}`} />
-            <span className={`text-[7px] font-black uppercase tracking-[0.25em] ${isUnlocked ? "text-green-500/80" : "text-amber-500/80"}`}>
-              {isUnlocked ? "Protocol Decrypted" : "Group Payload Locked"}
-            </span>
-          </div>
-        </div>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={openAddFriendModal}
-            className="p-2 text-white/20 hover:text-green-400 hover:bg-green-500/10 rounded-xl transition-all duration-300"
-            title="Invite Node"
-          >
-            <UserPlus size={18} strokeWidth={1.5} />
-          </button>
-          <button
-            onClick={() => onExitGroup(activeGroup.id)}
-            className="p-2 text-white/20 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all duration-300"
-            title="Terminate Protocol"
-          >
-            <LogOut size={18} strokeWidth={1.5} />
-          </button>
-          <button
-            onClick={() => setShowKey(true)}
-            className={`p-2 rounded-xl transition-all duration-500 ${isUnlocked ? "text-green-500 bg-green-500/5 hover:bg-green-500/10" : "text-amber-500 bg-amber-500/5 hover:bg-amber-500/10 animate-pulse"}`}
-            title="Protocol Passkey"
-          >
-            <Key size={18} strokeWidth={1.5} />
-          </button>
-        </div>
+    const replyBanner = isFirst && msg.replyTo && (
+      <div className="flex items-center gap-1 text-[11px] text-white/40 mb-1 ml-13 mr-4 truncate relative">
+        <div className="absolute -left-7 top-1/2 w-6 h-4 border-l-2 border-t-2 border-white/20 rounded-tl-lg" />
+        <span className="font-semibold text-white/60">@{msg.replyTo.senderUsername}</span>
+        <span className="truncate">Encrypted referenced message</span>
       </div>
+    );
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar relative">
-        <div className="absolute top-0 inset-x-0 h-32 bg-gradient-to-b from-black to-transparent pointer-events-none z-0 opacity-10" />
-        {messages.map((m) => (
-          <div key={m.id} className={`flex ${m.senderId === me.id ? "justify-end" : "justify-start"} animate-in fade-in slide-in-from-bottom-2 duration-500`}>
-            <div className={`flex items-end gap-3 max-w-[85%] ${m.senderId === me.id ? "flex-row-reverse" : "flex-row"}`}>
-              {m.senderId !== me.id && (
-                <div className="w-6 h-6 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center text-[10px] font-black text-white/20 flex-shrink-0">
-                  {m.username?.[0].toUpperCase() || "?"}
-                </div>
-              )}
-              <div
-                className={`p-4 px-5 rounded-[1.75rem] text-sm font-medium leading-[1.6] shadow-2xl relative group ${
-                  m.senderId === me.id
-                    ? "bg-indigo-600 text-white rounded-tr-none"
-                    : "bg-white/[0.03] border border-white/5 text-white/80 rounded-tl-none backdrop-blur-sm"
-                }`}
-              >
-                {m.senderId !== me.id && (
-                  <p className="text-[7px] font-black uppercase tracking-widest text-indigo-400 mb-2 opacity-50">
-                    @{m.senderUsername || "node"}
-                  </p>
-                )}
-                {isUnlocked ? (
-                  m.plaintext
-                ) : (
-                  <div className="flex flex-col gap-1.5 opacity-40">
-                    <div className="h-2 w-32 bg-white/20 rounded-full animate-pulse" />
-                    <div className="h-2 w-24 bg-white/20 rounded-full animate-pulse delay-75" />
-                  </div>
-                )}
-                <div className={`absolute bottom-[-18px] text-[6px] font-black uppercase tracking-widest text-white/10 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap ${m.senderId === me.id ? "right-1" : "left-1"}`}>
-                  {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • Secure Channel
-                </div>
-              </div>
+    return (
+      <div className={`group/msg relative pt-0.5 hover:bg-white/[0.02] ${isFirst ? 'mt-[17px]' : ''}`} 
+           onContextMenu={(e) => handleContextMenu(e, msg)} {...longPress} onTouchEnd={handleTap} onClick={handleTap}>
+        {replyBanner}
+        <div className="flex gap-4 px-4 py-0.5">
+          {isFirst ? (
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold flex-shrink-0 mt-0.5 ${isOwn ? 'bg-indigo-600/20 text-indigo-400' : 'bg-white/[0.08] text-white/40'}`}>
+              {groupItem.senderUsername?.[0]?.toUpperCase() || '?'}
             </div>
-          </div>
-        ))}
-      </div>
-
-      <form onSubmit={send} className="p-6 pb-10 bg-black/80 backdrop-blur-3xl flex gap-3 border-t border-white/[0.03] relative z-20">
-        <div className="flex-1 relative group">
-          <input
-            ref={inputRef}
-            disabled={!isUnlocked || isSending}
-            className="w-full bg-white/[0.03] border border-white/5 p-4 pr-12 rounded-[1.25rem] outline-none text-sm font-medium focus:border-indigo-500/30 focus:bg-white/[0.05] transition-all duration-300 disabled:opacity-30 placeholder:text-white/10"
-            placeholder={isUnlocked ? (isSending ? "Broadcasting..." : "Broadcast message...") : "Protocol locked. Enter passkey."}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-          />
-          {isUnlocked && (
-            <button
-              type="submit"
-              disabled={isSending}
-              className={`absolute right-2 top-1/2 -translate-y-1/2 p-2.5 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-600/20 hover:bg-indigo-500 transition-all hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100 ${isSending ? "animate-pulse" : ""}`}
-            >
-              {isSending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} strokeWidth={2.5} />}
-            </button>
+          ) : (
+            <div className="w-10 flex-shrink-0 flex items-center justify-center">
+              <span className="text-[10px] text-transparent group-hover/msg:text-white/20 font-mono transition-colors">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+            </div>
           )}
-        </div>
-      </form>
 
-      {showKey && (
-        <KeyModal
-          title="Group Passkey"
-          onClose={() => setShowKey(false)}
-          onSubmit={(k) => {
-            setChatKey(k);
-            setIsUnlocked(true);
-            setShowKey(false);
-          }}
-        />
-      )}
-
-      {showAddFriend && (
-        <div className="absolute inset-0 z-50 bg-black/90 backdrop-blur-xl flex items-center justify-center p-6">
-          <div className="bg-white/[0.03] border border-white/10 p-8 rounded-[3rem] w-full max-sm space-y-8 shadow-2xl animate-in zoom-in duration-500 relative overflow-hidden group">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 blur-3xl pointer-events-none" />
-            <div className="flex items-center justify-between relative z-10">
-              <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-white/40">Node Invitation</h3>
-              <button
-                onClick={() => setShowAddFriend(false)}
-                className="p-2 text-white/20 hover:text-white transition-all duration-300 hover:bg-white/[0.05] rounded-xl"
-              >
-                <X size={18} strokeWidth={1.5} />
-              </button>
-            </div>
-            {loadingFriendOptions ? (
-              <div className="text-white/20 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-3 py-10">
-                <Loader2 size={16} className="animate-spin" /> Verifying Links...
-              </div>
-            ) : addableFriends.length ? (
-              <div className="space-y-3 max-h-[320px] overflow-y-auto custom-scrollbar pr-1 relative z-10">
-                {addableFriends.map((f) => (
-                  <div
-                    key={f.id}
-                    className="bg-white/[0.02] border border-white/5 rounded-2xl px-5 py-4 flex items-center justify-between group/item hover:bg-white/[0.04] transition-all duration-300"
-                  >
-                    <span className="font-bold text-sm text-white/80 transition-colors group-hover/item:text-white">@{f.username}</span>
-                    <button
-                      onClick={() => addFriendToGroup(f.id)}
-                      disabled={addingFriendId === f.id}
-                      className="px-4 py-2 bg-indigo-600/10 border border-indigo-500/20 text-indigo-400 rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-indigo-600 hover:text-white transition-all duration-300 disabled:opacity-50"
-                    >
-                      {addingFriendId === f.id ? "Syncing..." : "Invite"}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-white/20 text-[10px] font-black uppercase tracking-widest text-center py-10 border border-dashed border-white/5 rounded-2xl">
-                No Available Nodes
+          <div className="flex-1 min-w-0">
+            {isFirst && (
+              <div className="flex items-baseline gap-2">
+                <span className={`font-semibold text-sm ${isOwn ? 'text-indigo-400' : 'text-white/90'}`}>{groupItem.senderUsername}</span>
+                <span className="text-[11px] text-white/20">{formatDiscordTime(groupItem.firstTime)}</span>
               </div>
             )}
+            
+            <p className="text-[15px] text-white/[0.75] leading-[1.625] mt-0.5">
+              {isUnlocked && msg.plaintext ? msg.plaintext : <span className="italic text-white/20">🔒 Encrypted{msg.id ? ' message' : ''}</span>}
+              {msg.edited_at && <span className="text-[10px] text-white/30 ml-2">(edited)</span>}
+            </p>
+
+            {msg.reactions && Object.keys(msg.reactions).length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1">
+                {Object.entries(msg.reactions).map(([emoji, users]) => (
+                  <button key={emoji} onClick={(e) => { e.stopPropagation(); handleReact(msg, emoji); }} className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] border ${users.includes(me.id) ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300' : 'bg-white/5 border-white/10 text-white/60'} hover:bg-white/10 transition-colors`}>
+                    <span>{emoji}</span>
+                    <span className="font-bold">{users.length}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          
+          <div className="absolute right-4 -top-2 hidden group-hover/msg:flex md:flex opacity-0 group-hover/msg:opacity-100 items-center bg-[#1a1a1e] border border-white/10 rounded-md shadow-lg overflow-hidden transition-opacity">
+            <button onClick={(e) => { e.stopPropagation(); setReplyTo(msg); inputRef.current?.focus(); }} className="p-2 text-white/50 hover:bg-white/10 hover:text-white transition-colors"><CornerUpLeft size={16} /></button>
+            {isOwn && <button onClick={(e) => { e.stopPropagation(); setEditingMsg(msg); setInput(msg.plaintext || ""); inputRef.current?.focus(); }} className="p-2 text-white/50 hover:bg-white/10 hover:text-white transition-colors"><Edit2 size={16} /></button>}
+            <button onClick={(e) => { e.stopPropagation(); handleContextMenu(e, msg); }} className="p-2 text-white/50 hover:bg-white/10 hover:text-white transition-colors"><MoreHorizontal size={16} /></button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const openAddFriend = async () => {
+    setShowAddFriend(true); setLoadingFriends(true);
+    try { const res = await api.groupFriendOptions(activeGroup.id); setAddableFriends(res.friends || []); } catch { setAddableFriends([]); } finally { setLoadingFriends(false); }
+  };
+
+  const addFriend = async (fid) => {
+    setAddingId(fid);
+    try { await api.addFriendToGroup(activeGroup.id, fid); setAddableFriends(prev => prev.filter(f => f.id !== fid)); } catch {} finally { setAddingId(""); }
+  };
+
+  const msgGroups = groupMessages(messages);
+
+  return (
+    <div className="h-full flex flex-col relative">
+      <div className="h-12 border-b border-white/[0.06] flex items-center px-4 gap-3 flex-shrink-0 bg-[#0c0c0e]">
+        <button onClick={onBack} className="md:hidden p-1 text-white/40 hover:text-white"><Menu size={20} /></button>
+        <Hash size={18} className="text-white/30" />
+        <span className="font-semibold text-[15px] text-white/90">{activeGroup.name}</span>
+        <div className="flex-1" />
+        <div className="flex items-center gap-1.5 text-[10px] mr-2">
+          <div className={`w-1.5 h-1.5 rounded-full ${isUnlocked ? 'bg-green-500' : 'bg-amber-500 animate-pulse'}`} />
+          <span className={isUnlocked ? 'text-green-500/70' : 'text-amber-500/70'}>{isUnlocked ? 'Decrypted' : 'Encrypted'}</span>
+        </div>
+        <button onClick={() => setShowKey(true)} className={`p-1.5 rounded transition-colors ${isUnlocked ? 'text-green-500/50 hover:text-green-400' : 'text-amber-500 hover:text-amber-400'}`}><Key size={16} /></button>
+        <button onClick={openAddFriend} className="p-1.5 rounded text-white/20 hover:text-green-400 transition-colors"><UserPlus size={16} /></button>
+        <button onClick={() => onExitGroup(activeGroup.id)} className="p-1.5 rounded text-white/20 hover:text-red-400 transition-colors"><LogOut size={16} /></button>
+      </div>
+
+      <div ref={scrollRef} className="flex-1 overflow-y-auto discord-scrollbar">
+        <div className="px-4 pt-8 pb-4">
+          <div className="w-20 h-20 rounded-full bg-white/[0.08] flex items-center justify-center mb-4 text-3xl font-bold text-white/40">#</div>
+          <h2 className="text-xl font-bold text-white">Welcome to #{activeGroup.name}</h2>
+          <p className="text-sm text-white/30 mt-1">This is the start of the <strong className="text-white/50">#{activeGroup.name}</strong> group.</p>
+          <div className="h-px bg-white/[0.06] mt-6" />
+        </div>
+        {msgGroups.map((g, gi) => (
+          <React.Fragment key={gi}>
+            {g.newDay && <div className="flex items-center gap-4 px-4 my-4"><div className="flex-1 h-px bg-white/[0.06]" /><span className="text-[11px] font-semibold text-white/30">{formatDateSeparator(g.firstTime)}</span><div className="flex-1 h-px bg-white/[0.06]" /></div>}
+            <MessageItem msg={g.messages[0]} isFirst={true} groupItem={g} />
+            {g.messages.slice(1).map(m => (
+              <MessageItem key={m.id} msg={m} />
+            ))}
+          </React.Fragment>
+        ))}
+        {typingUsers.length > 0 && (
+          <div className="px-4 py-2 flex items-center gap-2">
+            <div className="flex gap-1">
+              <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+            <span className="text-xs font-semibold text-white/40">{typingUsers.join(", ")} {typingUsers.length > 1 ? "are" : "is"} typing...</span>
+          </div>
+        )}
+        <div className="h-6" />
+      </div>
+
+      <div className="px-3 md:px-4 pb-5 md:pb-6 pt-2 flex-shrink-0 safe-bottom">
+        {(replyTo || editingMsg) && (
+          <div className="mb-2 bg-indigo-500/10 border border-indigo-500/20 rounded-t-xl px-4 py-2 flex items-center justify-between text-xs text-indigo-300">
+            <div className="flex items-center gap-2 truncate">
+              {replyTo ? <CornerUpLeft size={14} /> : <Edit2 size={14} />}
+              <span className="font-semibold">{replyTo ? `Replying to ${replyTo.senderUsername}` : "Editing Message"}</span>
+            </div>
+            <button onClick={() => { setReplyTo(null); setEditingMsg(null); setInput(""); }} className="p-1 hover:bg-white/10 rounded-full"><X size={14} /></button>
+          </div>
+        )}
+        <form onSubmit={send} className={`bg-white/[0.04] rounded-xl px-3 md:px-4 flex items-center border ${replyTo || editingMsg ? 'border-t-0 rounded-t-none' : 'border-white/[0.06]'} focus-within:border-white/10 transition-colors`}>
+          {!isUnlocked && <button type="button" onClick={() => setShowKey(true)} className="p-2 -ml-1 text-amber-500"><Lock size={18} /></button>}
+          <input ref={inputRef} disabled={!isUnlocked || isSending}
+            className="flex-1 bg-transparent py-3 text-[15px] outline-none text-white/80 placeholder:text-white/20 disabled:opacity-30"
+            placeholder={isUnlocked ? `Message #${activeGroup.name}` : "Enter passkey to unlock"} value={input} onChange={(e) => setInput(e.target.value)} />
+          {isUnlocked && <button type="submit" disabled={!input.trim() || isSending} className="p-2 text-white/30 hover:text-indigo-400 disabled:opacity-20">
+            {isSending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
+          </button>}
+        </form>
+      </div>
+      {showKey && <KeyModal title="Group Key" onClose={() => setShowKey(false)} onSubmit={(k) => { setChatKey(k); setIsUnlocked(true); setShowKey(false); }} />}
+      {contextMenu && (
+        <MessageContextMenu 
+          {...contextMenu} 
+          onClose={() => setContextMenu(null)}
+          onReact={handleReact}
+          onReply={(msg) => { setReplyTo(msg); inputRef.current?.focus(); }}
+          onEdit={(msg) => { setEditingMsg(msg); setInput(msg.plaintext || ""); inputRef.current?.focus(); }}
+        />
+      )}
+      {showAddFriend && (
+        <div className="absolute inset-0 z-50 bg-black/90 backdrop-blur-xl flex items-center justify-center p-6">
+          <div className="bg-[#1a1a1e] border border-white/10 p-6 rounded-2xl w-full max-w-sm space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold uppercase tracking-widest text-white/50">Invite to Group</h3>
+              <button onClick={() => setShowAddFriend(false)} className="p-1 text-white/20 hover:text-white"><X size={16} /></button>
+            </div>
+            {loadingFriends ? <div className="py-8 text-center text-white/20 text-sm flex items-center justify-center gap-2"><Loader2 size={16} className="animate-spin" /> Loading...</div>
+            : addableFriends.length ? <div className="space-y-2 max-h-60 overflow-y-auto">{addableFriends.map(f => (
+              <div key={f.id} className="flex items-center justify-between p-3 rounded-lg bg-white/[0.03] hover:bg-white/[0.05]">
+                <span className="text-sm text-white/80">@{f.username}</span>
+                <button onClick={() => addFriend(f.id)} disabled={addingId === f.id} className="px-3 py-1 bg-indigo-600/20 text-indigo-400 rounded text-xs font-bold hover:bg-indigo-600 hover:text-white transition-colors disabled:opacity-50">{addingId === f.id ? "..." : "Invite"}</button>
+              </div>
+            ))}</div>
+            : <div className="py-8 text-center text-white/20 text-sm">No friends to invite</div>}
           </div>
         </div>
       )}
@@ -628,6 +675,7 @@ const GroupChatContainer = ({ activeGroup, me, onBack, onExitGroup }) => {
   );
 };
 
+/* ─── Main App ─── */
 const App = () => {
   const [view, setView] = useState("auth");
   const [authMode, setAuthMode] = useState("login");
@@ -643,751 +691,384 @@ const App = () => {
   const [outgoingRequests, setOutgoingRequests] = useState([]);
   const [myGroups, setMyGroups] = useState([]);
 
-  const [activeTab, setActiveTab] = useState("chats");
   const [searchQuery, setSearchQuery] = useState("");
+  const [sidebarFilter, setSidebarFilter] = useState("");
   const [groupNameInput, setGroupNameInput] = useState("");
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
+  const [showCreateGroup, setShowCreateGroup] = useState(false);
 
   const [activeChat, setActiveChat] = useState(null);
   const [activeGroup, setActiveGroup] = useState(null);
+  const [friendsTab, setFriendsTab] = useState("all");
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(true);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [notificationPrefs, setNotificationPrefs] = useState(() => {
-    try {
-      const raw = localStorage.getItem(NOTIFICATION_PREFS_KEY);
-      if (!raw) return DEFAULT_NOTIFICATION_PREFS;
-      return { ...DEFAULT_NOTIFICATION_PREFS, ...JSON.parse(raw) };
-    } catch {
-      return DEFAULT_NOTIFICATION_PREFS;
-    }
+    try { return { ...DEFAULT_NOTIFICATION_PREFS, ...JSON.parse(localStorage.getItem(NOTIFICATION_PREFS_KEY)) }; } catch { return DEFAULT_NOTIFICATION_PREFS; }
   });
-  const [notificationPermission, setNotificationPermission] = useState(() => {
-    if (typeof Notification === "undefined") return "unsupported";
-    return Notification.permission;
-  });
+
+  const onlineUsers = usePresence(me);
 
   const loadNetwork = async (search = "") => {
-    const [usersRes, friendsRes, requestsRes, myGroupsRes] =
-      await Promise.all([
-        api.users(search),
-        api.friends(),
-        api.friendRequests(),
-        api.myGroups()
-      ]);
-
-    setUsers(usersRes.users || []);
-    setFriends([AI_USER, ...(friendsRes.friends || [])]);
-    setIncomingRequests(requestsRes.incoming || []);
-    setOutgoingRequests(requestsRes.outgoing || []);
-    setMyGroups(myGroupsRes.groups || []);
+    const [usersRes, friendsRes, requestsRes, myGroupsRes] = await Promise.allSettled([api.users(search), api.friends(), api.friendRequests(), api.myGroups()]);
+    if (usersRes.status === "fulfilled") setUsers(usersRes.value.users || []);
+    if (friendsRes.status === "fulfilled") setFriends([AI_USER, ...(friendsRes.value.friends || [])]);
+    if (requestsRes.status === "fulfilled") { setIncomingRequests(requestsRes.value.incoming || []); setOutgoingRequests(requestsRes.value.outgoing || []); }
+    if (myGroupsRes.status === "fulfilled") setMyGroups(myGroupsRes.value.groups || []);
   };
 
   useEffect(() => {
-    const bootstrap = async () => {
+    (async () => {
       try {
         await api.getCsrf();
-        const meRes = await api.me();
-        setMe(meRes.user);
+        const r = await api.me();
+        setMe(r.user);
         setView("main");
-        await loadNetwork("");
-      } catch {
-        setView("auth");
-      }
-    };
-    bootstrap();
+        // Load network in background - don't block the view
+        loadNetwork("");
+      } catch { setView("auth"); }
+    })();
   }, []);
-
-  useEffect(() => {
-    if (!me) return;
-    loadNetwork(searchQuery).catch(() => {});
-  }, [me, searchQuery]);
-
-  useEffect(() => {
-    if (!me) return;
-    const id = setInterval(() => {
-      loadNetwork(searchQuery).catch(() => {});
-    }, 5000);
-    return () => clearInterval(id);
-  }, [me, searchQuery]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(NOTIFICATION_PREFS_KEY, JSON.stringify(notificationPrefs));
-    } catch {}
-  }, [notificationPrefs]);
+  useEffect(() => { if (me) loadNetwork(searchQuery).catch(() => {}); }, [me, searchQuery]);
+  useEffect(() => { if (!me) return; const id = setInterval(() => loadNetwork(searchQuery).catch(() => {}), 5000); return () => clearInterval(id); }, [me, searchQuery]);
+  useEffect(() => { try { localStorage.setItem(NOTIFICATION_PREFS_KEY, JSON.stringify(notificationPrefs)); } catch {} }, [notificationPrefs]);
 
   const handleAuth = async (e) => {
-    e.preventDefault();
-    setAuthError("");
-    setIsProcessing(true);
-    try {
-      await api.getCsrf();
-      const fn = authMode === "login" ? api.login : api.register;
-      const res = await fn({ username, password });
-      setMe(res.user);
-      setView("main");
-      await loadNetwork("");
-    } catch (err) {
-      setAuthError(err.message || "Authentication failed");
-    } finally {
-      setIsProcessing(false);
-    }
+    e.preventDefault(); setAuthError(""); setIsProcessing(true);
+    try { await api.getCsrf(); const res = await (authMode === "login" ? api.login : api.register)({ username, password }); setMe(res.user); setView("main"); await loadNetwork(""); }
+    catch (err) { setAuthError(err.message || "Authentication failed"); }
+    finally { setIsProcessing(false); }
   };
 
-  const onLogout = async () => {
-    try {
-      await api.logout();
-    } catch {}
-    setView("auth");
-    setMe(null);
-    setActiveChat(null);
-    setActiveGroup(null);
-    setUsers([]);
-    setFriends([]);
-    setIncomingRequests([]);
-    setOutgoingRequests([]);
-    setMyGroups([]);
-    setPassword("");
+  const onLogout = async () => { try { await api.logout(); } catch {} setView("auth"); setMe(null); setActiveChat(null); setActiveGroup(null); setUsers([]); setFriends([]); setIncomingRequests([]); setOutgoingRequests([]); setMyGroups([]); setPassword(""); };
+  const sendFriendReq = async (id) => {
+    // Optimistic: immediately show as outgoing
+    const target = users.find(u => u.id === id);
+    if (target) setOutgoingRequests(p => [...p, { toUserId: id, username: target.username }]);
+    try { await api.sendFriendRequest(id); loadNetwork(searchQuery); }
+    catch (err) { setOutgoingRequests(p => p.filter(r => r.toUserId !== id)); alert("Failed: " + (err.message || "Error")); }
   };
-
-  const sendFriendReq = async (targetId) => {
-    try {
-      await api.sendFriendRequest(targetId);
-      await loadNetwork(searchQuery);
-    } catch (err) {
-      alert("Failed to send request: " + (err.message || "Check permissions"));
-    }
+  const acceptFriendReq = async (id) => {
+    // Optimistic: immediately remove from incoming
+    const req = incomingRequests.find(r => r.fromUserId === id);
+    setIncomingRequests(p => p.filter(r => r.fromUserId !== id));
+    if (req) setFriends(p => [...p, { id, username: req.username }]);
+    try { await api.acceptFriendRequest(id); loadNetwork(searchQuery); }
+    catch (err) { alert("Failed: " + (err.message || "Error")); loadNetwork(searchQuery); }
   };
+  const rejectFriendReq = async (id) => { try { await api.rejectFriendRequest(id); setIncomingRequests(p => p.filter(r => r.fromUserId !== id)); await loadNetwork(searchQuery); } catch {} };
+  const unsendFriendReq = async (id) => { try { await api.unsendFriendRequest(id); setOutgoingRequests(p => p.filter(r => r.toUserId !== id)); await loadNetwork(searchQuery); } catch {} };
+  const removeFriend = async (id) => { if (!id || id === AI_USER.id) return; try { await api.removeFriend(id); if (activeChat?.id === id) setActiveChat(null); await loadNetwork(searchQuery); } catch {} };
+  const createGroup = async () => { const n = groupNameInput.trim(); if (n.length < 2) return; setIsCreatingGroup(true); try { await api.createGroup({ name: n }); setGroupNameInput(""); setShowCreateGroup(false); await loadNetwork(searchQuery); } catch {} finally { setIsCreatingGroup(false); } };
+  const leaveGroup = async (gid) => { try { await api.leaveGroup(gid); if (activeGroup?.id === gid) setActiveGroup(null); await loadNetwork(searchQuery); } catch {} };
 
-  const acceptFriendReq = async (fromUserId) => {
-    try {
-      await api.acceptFriendRequest(fromUserId);
-      setIncomingRequests((prev) => prev.filter((r) => r.fromUserId !== fromUserId));
-      setOutgoingRequests((prev) => prev.filter((r) => r.toUserId !== fromUserId));
-      await loadNetwork(searchQuery);
-    } catch (err) {
-      alert("Failed to accept: " + (err.message || "Database error"));
-    }
-  };
+  const incomingIds = useMemo(() => new Set(incomingRequests.map(r => r.fromUserId)), [incomingRequests]);
+  const outgoingIds = useMemo(() => new Set(outgoingRequests.map(r => r.toUserId)), [outgoingRequests]);
+  const discoveredUsers = useMemo(() => users.filter(u => u.id !== me?.id && u.username.toLowerCase().includes(searchQuery.toLowerCase()) && !friends.some(f => f.id === u.id) && !incomingIds.has(u.id) && !outgoingIds.has(u.id)), [users, me?.id, searchQuery, friends, incomingIds, outgoingIds]);
+  const filteredFriends = useMemo(() => friends.filter(f => f.username.toLowerCase().includes(sidebarFilter.toLowerCase())), [friends, sidebarFilter]);
+  const filteredGroups = useMemo(() => myGroups.filter(g => g.name.toLowerCase().includes(sidebarFilter.toLowerCase())), [myGroups, sidebarFilter]);
 
-  const rejectFriendReq = async (fromUserId) => {
-    try {
-      await api.rejectFriendRequest(fromUserId);
-      setIncomingRequests((prev) => prev.filter((r) => r.fromUserId !== fromUserId));
-      await loadNetwork(searchQuery);
-    } catch {}
-  };
+  const isMainView = !activeChat && !activeGroup;
 
-  const unsendFriendReq = async (toUserId) => {
-    try {
-      await api.unsendFriendRequest(toUserId);
-      setOutgoingRequests((prev) => prev.filter((r) => r.toUserId !== toUserId));
-      await loadNetwork(searchQuery);
-    } catch {}
-  };
-
-  const removeFriend = async (targetId) => {
-    if (!targetId || targetId === AI_USER.id) return;
-    try {
-      await api.removeFriend(targetId);
-      if (activeChat?.id === targetId) setActiveChat(null);
-      await loadNetwork(searchQuery);
-    } catch {}
-  };
-
-  const createGroup = async () => {
-    const clean = groupNameInput.trim();
-    if (clean.length < 2) return;
-    setIsCreatingGroup(true);
-    try {
-      await api.createGroup({ name: clean });
-      setGroupNameInput("");
-      await loadNetwork(searchQuery);
-    } catch {
-    } finally {
-      setIsCreatingGroup(false);
-    }
-  };
-
-
-  const leaveGroup = async (groupId) => {
-    try {
-      await api.leaveGroup(groupId);
-      if (activeGroup?.id === groupId) setActiveGroup(null);
-      await loadNetwork(searchQuery);
-    } catch {}
-  };
-
-  const toggleNotificationPref = (key) => {
-    setNotificationPrefs((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
-
-  const requestBrowserNotificationPermission = async () => {
-    if (typeof Notification === "undefined") return;
-    const permission = await Notification.requestPermission();
-    setNotificationPermission(permission);
-  };
-
-  const notificationSettingRows = [
-    {
-      key: "messages",
-      label: "Message Alerts",
-      description: "Direct and group message alerts"
-    },
-    {
-      key: "friendRequests",
-      label: "Friend Requests",
-      description: "Incoming friend request alerts"
-    },
-    {
-      key: "groupRequests",
-      label: "Group Requests",
-      description: "Incoming group join request alerts"
-    },
-    {
-      key: "sounds",
-      label: "Notification Sound",
-      description: "Play sound on alert events"
-    }
-  ];
-
-  const incomingRequestIds = useMemo(
-    () => new Set(incomingRequests.map((r) => r.fromUserId)),
-    [incomingRequests]
-  );
-  const outgoingRequestIds = useMemo(
-    () => new Set(outgoingRequests.map((r) => r.toUserId)),
-    [outgoingRequests]
-  );
-
-  const discoveredUsers = useMemo(
-    () =>
-      users.filter(
-        (u) =>
-          u.id !== me?.id &&
-          u.username.includes(searchQuery.toLowerCase()) &&
-          !friends.some((f) => f.id === u.id) &&
-          !incomingRequestIds.has(u.id) &&
-          !outgoingRequestIds.has(u.id)
-      ),
-    [users, me?.id, searchQuery, friends, incomingRequestIds, outgoingRequestIds]
-  );
-
-  if (view === "auth") {
-    return (
-      <div className="h-screen bg-black flex items-center justify-center p-6 text-white font-sans selection:bg-indigo-500/30 overflow-hidden relative">
-        {/* Subtle Background Accent */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-indigo-600/5 rounded-full blur-[120px] pointer-events-none" />
-        
-        <div className="w-full max-w-[340px] space-y-10 animate-in fade-in slide-in-from-bottom-8 duration-1000 relative z-10">
+  /* ─── AUTH ─── */
+  if (view === "auth") return (
+    <div className="h-screen bg-[#0a0a0c] flex items-center justify-center p-6 text-white font-sans overflow-hidden relative">
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-indigo-600/10 rounded-full blur-[120px] pointer-events-none" />
+      <div className="w-full max-w-[400px] relative z-10">
+        <div className="bg-[#121215]/60 border border-white/[0.04] backdrop-blur-2xl p-8 md:p-10 rounded-3xl shadow-2xl space-y-8">
           <div className="text-center space-y-3">
-            <div className="w-16 h-16 bg-white/[0.03] border border-white/10 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-2xl backdrop-blur-xl group transition-all duration-500 hover:border-indigo-500/40">
-              <ShieldCheck className="text-white/80 group-hover:text-indigo-400 transition-colors duration-500" size={32} strokeWidth={1.5} />
-            </div>
-            <h1 className="text-2xl font-black tracking-[-0.05em] text-white/90">
-              VAULT<span className="text-indigo-500 opacity-80">ID</span>
-            </h1>
-            <p className="text-[10px] text-slate-500 uppercase tracking-[0.5em] font-light">
-              Unique Node Protocol
-            </p>
+            <div className="w-16 h-16 bg-white/[0.04] border border-white/10 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-inner"><ShieldCheck className="text-indigo-400/80" size={32} /></div>
+            <h1 className="text-2xl md:text-3xl font-black tracking-tight drop-shadow-sm">VAULT<span className="text-indigo-500 drop-shadow-md">ID</span></h1>
+            <p className="text-[11px] text-white/40 uppercase tracking-[0.3em] font-medium">Encrypted Communication</p>
           </div>
-
-          <form onSubmit={handleAuth} className="space-y-6">
-            <div className="space-y-4">
-              <div className="group relative">
-                <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
-                  <UserIcon size={16} className="text-slate-500 group-focus-within:text-indigo-400 transition-colors" />
-                </div>
-                <input
-                  className="w-full bg-white/[0.03] border border-white/5 p-4 pl-12 rounded-[1.25rem] outline-none text-sm font-medium focus:border-indigo-500/30 focus:bg-white/[0.05] transition-all duration-300 placeholder:text-slate-600"
-                  placeholder="Unique Username"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  autoComplete="username"
-                />
-              </div>
-              <div className="group relative">
-                <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
-                  <Fingerprint size={16} className="text-slate-500 group-focus-within:text-indigo-400 transition-colors" />
-                </div>
-                <input
-                  className="w-full bg-white/[0.03] border border-white/5 p-4 pl-12 rounded-[1.25rem] outline-none text-sm font-medium focus:border-indigo-500/30 focus:bg-white/[0.05] transition-all duration-300 placeholder:text-slate-600"
-                  type="password"
-                  placeholder={authMode === "signup" ? "Passcode (min 10 chars)" : "Passcode"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  autoComplete="current-password"
-                />
-              </div>
+          <form onSubmit={handleAuth} className="space-y-4">
+            <div className="relative group">
+              <UserIcon size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30 group-focus-within:text-indigo-400 transition-colors" />
+              <input className="w-full bg-white/[0.03] border border-white/[0.06] p-4 pl-11 rounded-xl outline-none text-sm focus:border-indigo-500/50 focus:bg-white/[0.05] transition-all placeholder:text-white/20 shadow-inner" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
             </div>
-
-            {authError && (
-              <div className="bg-red-500/5 border border-red-500/10 p-4 rounded-2xl flex items-center gap-3 text-red-500/90 text-[10px] font-bold uppercase tracking-wider animate-in shake duration-500">
-                <AlertCircle size={14} strokeWidth={2.5} /> {authError}
-              </div>
-            )}
-
-            <button
-              disabled={isProcessing}
-              className="group relative w-full overflow-hidden rounded-[1.25rem] bg-indigo-600 p-[1px] transition-all duration-300 hover:shadow-[0_0_30px_-5px_rgba(79,70,229,0.5)] active:scale-[0.98] disabled:opacity-50"
-            >
-              <div className="relative flex h-14 items-center justify-center rounded-[1.25rem] bg-indigo-600 transition-all duration-300 group-hover:bg-indigo-500">
-                {isProcessing ? (
-                  <Loader2 className="animate-spin text-white/50" size={20} />
-                ) : (
-                  <span className="text-[11px] font-black uppercase tracking-[0.2em] text-white">
-                    {authMode === "login" ? "Sync Identity" : "Register Node"}
-                  </span>
-                )}
-              </div>
+            <div className="relative group">
+              <Fingerprint size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30 group-focus-within:text-indigo-400 transition-colors" />
+              <input className="w-full bg-white/[0.03] border border-white/[0.06] p-4 pl-11 rounded-xl outline-none text-sm focus:border-indigo-500/50 focus:bg-white/[0.05] transition-all placeholder:text-white/20 shadow-inner" type="password" placeholder={authMode === "signup" ? "Passcode (min 10 chars)" : "Passcode"} value={password} onChange={(e) => setPassword(e.target.value)} />
+            </div>
+            {authError && <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-xl flex items-center gap-2 text-red-400 text-xs shadow-sm"><AlertCircle size={14} className="flex-shrink-0" />{authError}</div>}
+            <button disabled={isProcessing} className="w-full bg-indigo-600 hover:bg-indigo-500 rounded-xl py-4 pt-[17px] text-sm font-bold text-white shadow-lg shadow-indigo-600/20 transition-all disabled:opacity-50 disabled:shadow-none hover:-translate-y-0.5 active:translate-y-0">
+              {isProcessing ? <Loader2 className="animate-spin mx-auto" size={18} /> : authMode === "login" ? "Sign In" : "Create Account"}
             </button>
           </form>
-
-          <button
-            onClick={() => {
-              setAuthMode(authMode === "login" ? "signup" : "login");
-              setAuthError("");
-            }}
-            className="w-full text-[10px] text-slate-500 font-bold uppercase tracking-[0.35em] hover:text-white transition-all duration-300 py-2"
-          >
-            {authMode === "login" ? "New Architecture?" : "Existing Node?"}
-          </button>
+          <div className="pt-2">
+            <button onClick={() => { setAuthMode(authMode === "login" ? "signup" : "login"); setAuthError(""); }} className="w-full text-xs text-white/40 hover:text-white/80 transition-colors py-2 font-medium">
+              {authMode === "login" ? "Need an account? Register" : "Already have an account? Sign In"}
+            </button>
+          </div>
         </div>
       </div>
-    );
-  }
+    </div>
+  );
 
+  /* ─── MAIN LAYOUT ─── */
   return (
-    <div className="h-screen bg-black text-white flex flex-col font-sans overflow-hidden selection:bg-indigo-500/30">
-      <header className="sm:px-8 px-4 py-5 border-b border-white/[0.03] bg-black/50 backdrop-blur-xl relative z-30">
-        <div className="max-w-7xl mx-auto w-full flex justify-between items-center">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-white/[0.03] border border-white/10 flex items-center justify-center shadow-2xl">
-              <ShieldCheck size={18} className="text-white/40" strokeWidth={1.5} />
-            </div>
-            <p className="text-[10px] font-black tracking-[0.4em] text-white/40 uppercase hidden sm:block">
-              Vault<span className="text-indigo-500/50">Protocol</span>
-            </p>
+    <div onContextMenu={(e) => { if (e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") e.preventDefault(); }} className="h-[100dvh] bg-[#0a0a0c] text-white flex font-['Inter',system-ui,sans-serif] overflow-hidden">
+      {/* ─── Sidebar ─── */}
+      <aside className={`${mobileSidebarOpen ? 'flex' : 'hidden'} md:flex flex-col w-full md:w-[272px] bg-[#0c0c0e] border-r border-white/[0.06] flex-shrink-0 mobile-view-transition safe-top`}>
+        {/* Search */}
+        <div className="p-3 pb-2">
+          <div className="flex items-center gap-2 bg-white/[0.04] rounded-lg px-3 py-[9px]">
+            <Search size={16} className="text-white/20" />
+            <input className="bg-transparent text-[14px] outline-none flex-1 text-white/70 placeholder:text-white/15" placeholder="Find a conversation" value={sidebarFilter} onChange={(e) => setSidebarFilter(e.target.value)} />
           </div>
-          
-          <div className="flex items-center gap-4 sm:gap-6">
-            <div className="flex flex-col items-end mr-1 sm:mr-2">
-              <p className="text-[10px] font-bold tracking-tight text-white/90">@{me?.username}</p>
-              <p className="text-[7px] text-green-500/70 uppercase font-black tracking-[0.2em] flex items-center gap-1.5 mt-0.5">
-                <span className="w-1 h-1 bg-green-500 rounded-full shadow-[0_0_5px_rgba(34,197,94,0.5)]" /> Node Active
-              </p>
+        </div>
+
+        {/* Friends button */}
+        <button onClick={() => { setActiveChat(null); setActiveGroup(null); setMobileSidebarOpen(false); }}
+          className={`mx-2 mb-1 flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors active:scale-[0.98] ${isMainView ? 'bg-white/[0.06] text-white' : 'text-white/40 hover:text-white/70 active:bg-white/[0.04]'}`}>
+          <GroupsIcon size={20} /> Friends
+          {incomingRequests.length > 0 && <span className="ml-auto bg-red-500 text-white text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center">{incomingRequests.length}</span>}
+        </button>
+
+        <div className="h-px bg-white/[0.06] mx-3 my-1.5" />
+
+        {/* Scrollable list */}
+        <div className="flex-1 overflow-y-auto discord-scrollbar px-2 space-y-0.5">
+          {/* DMs */}
+          <div className="flex items-center justify-between px-2 pt-3 pb-1">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-white/20">Direct Messages</span>
+          </div>
+          {filteredFriends.map(f => (
+            <button key={f.id} onClick={() => { setActiveChat(f); setActiveGroup(null); setMobileSidebarOpen(false); }}
+              className={`w-full flex items-center gap-3 px-2.5 py-2 md:py-1.5 rounded-lg transition-colors active:scale-[0.98] ${activeChat?.id === f.id ? 'bg-white/[0.06] text-white' : 'text-white/40 active:bg-white/[0.04]'}`}>
+              <div className="relative">
+                <div className={`w-9 md:w-8 h-9 md:h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${f.isAI ? 'bg-indigo-600/25 text-indigo-400' : 'bg-white/[0.06] text-white/40'}`}>
+                  {f.isAI ? <Sparkles size={14} /> : f.username[0].toUpperCase()}
+                </div>
+                {!f.isAI && (
+                  <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-[#121215] transition-colors ${onlineUsers.has(f.id) ? 'bg-green-500' : 'bg-white/20'}`} />
+                )}
+              </div>
+              <span className="text-[14px] md:text-[13px] truncate">{f.username}</span>
+            </button>
+          ))}
+
+          {/* Groups */}
+          <div className="flex items-center justify-between px-2 pt-4 pb-1">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-white/20">Groups</span>
+            <button onClick={() => { setShowCreateGroup(!showCreateGroup); setGroupNameInput(""); }} className="p-1 -mr-1 text-white/30 hover:text-white/80 transition-colors active:scale-95"><Plus size={16} /></button>
+          </div>
+          {showCreateGroup && (
+            <div className="flex gap-1.5 px-2 mb-2">
+              <input autoFocus className="flex-1 bg-white/[0.04] border border-white/[0.06] rounded-md px-2.5 py-1.5 text-sm outline-none text-white/80 placeholder:text-white/20 focus:border-indigo-500/50 focus:bg-white/[0.06] transition-all" placeholder="Group name..." value={groupNameInput} onChange={(e) => setGroupNameInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && createGroup()} />
+              <button onClick={createGroup} disabled={isCreatingGroup || groupNameInput.trim().length < 2} className="px-2.5 bg-indigo-600 rounded-md text-white hover:bg-indigo-500 disabled:opacity-40 transition-colors flex items-center justify-center min-w-[36px]">
+                {isCreatingGroup ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} strokeWidth={3} />}
+              </button>
             </div>
-            <div className="h-6 w-[1px] bg-white/5" />
+          )}
+          {filteredGroups.map(g => (
+            <button key={g.id} onClick={() => { setActiveGroup(g); setActiveChat(null); setMobileSidebarOpen(false); }}
+              className={`w-full flex items-center gap-3 px-2.5 py-2 md:py-1.5 rounded-lg transition-colors active:scale-[0.98] ${activeGroup?.id === g.id ? 'bg-white/[0.06] text-white' : 'text-white/40 active:bg-white/[0.04]'}`}>
+              <div className="w-9 md:w-8 h-9 md:h-8 rounded-full bg-white/[0.06] flex items-center justify-center text-xs font-bold text-white/40 flex-shrink-0">#</div>
+              <span className="text-[14px] md:text-[13px] truncate">{g.name}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* User panel */}
+        <div className="p-2 border-t border-white/[0.06] bg-black/30 safe-bottom">
+          <div className="flex items-center justify-between px-2 py-2 md:py-1.5">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-9 md:w-8 h-9 md:h-8 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm font-bold text-indigo-400 flex-shrink-0">{me?.username?.[0]?.toUpperCase() || '?'}</div>
+              <div className="min-w-0">
+                <p className="text-[14px] md:text-[13px] font-medium text-white/80 truncate">{me?.username}</p>
+                <p className="text-[11px] text-green-500/60 flex items-center gap-1"><span className="w-1.5 h-1.5 bg-green-500 rounded-full" />Online</p>
+              </div>
+            </div>
             <div className="flex items-center gap-1">
-              <button
-                onClick={() => setShowSettingsModal(true)}
-                className="p-2 text-white/30 hover:text-indigo-400 transition-all duration-300 hover:bg-white/[0.02] rounded-lg"
-                title="Settings"
-              >
-                <SettingsIcon size={18} strokeWidth={1.5} />
-              </button>
-              <button
-                onClick={onLogout}
-                className="p-2 text-white/30 hover:text-red-500 transition-all duration-300 hover:bg-white/[0.02] rounded-lg"
-                title="Logout"
-              >
-                <LogOut size={18} strokeWidth={1.5} />
-              </button>
+              <button onClick={() => setShowSettingsModal(true)} className="p-2.5 text-white/20 active:text-white/50 rounded-xl active:bg-white/5 transition-colors"><SettingsIcon size={18} /></button>
+              <button onClick={onLogout} className="p-2.5 text-white/20 active:text-red-400 rounded-xl active:bg-red-500/10 transition-colors"><LogOut size={18} /></button>
             </div>
           </div>
         </div>
-      </header>
+      </aside>
 
-      <main className={`flex-1 overflow-y-auto custom-scrollbar ${activeChat || activeGroup ? 'sm:p-8 p-0' : 'sm:p-8 p-4 pt-10 pb-32'}`}>
-        <div className={`mx-auto w-full ${activeChat || activeGroup ? 'max-w-6xl' : 'max-w-5xl'}`}>
+      {/* ─── Main Content ─── */}
+      <main className={`${mobileSidebarOpen && (activeChat || activeGroup) ? 'hidden md:flex' : mobileSidebarOpen ? 'hidden md:flex' : 'flex'} md:flex flex-col flex-1 min-w-0`}>
         {activeChat ? (
-          <ChatContainer
-            activeChat={activeChat}
-            me={me}
-            onBack={() => setActiveChat(null)}
-            onRemoveFriend={removeFriend}
-          />
+          <ChatPanel activeChat={activeChat} me={me} onRemoveFriend={removeFriend} onBack={() => setMobileSidebarOpen(true)} />
         ) : activeGroup ? (
-          <GroupChatContainer
-            activeGroup={activeGroup}
-            me={me}
-            onBack={() => setActiveGroup(null)}
-            onExitGroup={leaveGroup}
-          />
+          <GroupChatPanel activeGroup={activeGroup} me={me} onBack={() => setMobileSidebarOpen(true)} onExitGroup={leaveGroup} />
         ) : (
-          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {activeTab === "chats" && (
-              <div className="space-y-6">
-                <div className="flex items-center justify-between px-2">
-                  <h3 className="text-[10px] font-black text-white/30 tracking-[0.4em] uppercase">
-                    Established Links
-                  </h3>
-                  <div className="h-px flex-1 bg-white/5 ml-4" />
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {friends.map((f) => (
-                    <button
-                      key={f.id}
-                      onClick={() => setActiveChat(f)}
-                      className="w-full bg-white/[0.015] p-5 rounded-[2rem] border border-white/[0.03] flex items-center gap-5 hover:bg-white/[0.04] hover:border-white/10 transition-all duration-300 group active:scale-[0.98] ring-1 ring-transparent hover:ring-white/5"
-                    >
-                      <div
-                        className={`w-12 h-12 rounded-2xl flex items-center justify-center text-lg font-black transition-all duration-500 shadow-2xl ${
-                          f.isAI 
-                            ? "bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 group-hover:scale-110" 
-                            : "bg-white/[0.03] text-white/40 border border-white/5 group-hover:scale-110 group-hover:border-white/20"
-                        }`}
-                      >
-                        {f.isAI ? <Sparkles size={20} strokeWidth={2} /> : f.username[0].toUpperCase()}
-                      </div>
-                      <div className="text-left flex-1 min-w-0">
-                        <div className="flex items-center justify-between">
-                          <p className="font-bold text-white/90 group-hover:text-white transition-colors tracking-tight truncate">
-                            @{f.username}
-                          </p>
-                          <span className="text-[8px] text-white/20 font-black uppercase tracking-widest bg-white/5 px-2 py-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity">
-                            Open Shard
-                          </span>
+          /* ─── Friends View ─── */
+          <div className="h-full flex flex-col">
+            <div className="h-13 md:h-12 border-b border-white/[0.06] flex items-center px-3 md:px-4 gap-3 flex-shrink-0 bg-[#0c0c0e] safe-top md:bg-transparent">
+              <button onClick={() => setMobileSidebarOpen(true)} className="md:hidden p-2 -ml-1 text-white/50 active:bg-white/5 rounded-xl transition-colors"><Menu size={22} /></button>
+              <GroupsIcon size={20} className="text-white/30 hidden md:block" />
+              <span className="font-semibold text-[15px] text-white/90 mr-2 md:mr-0">Friends</span>
+              <div className="h-6 w-px bg-white/[0.06] hidden md:block" />
+              <div className="flex-1 overflow-x-auto discord-scrollbar flex gap-1.5 md:gap-3 py-1">
+                {["all", "pending", "add"].map(tab => (
+                  <button key={tab} onClick={() => setFriendsTab(tab)}
+                    className={`px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap active:scale-[0.98] ${friendsTab === tab ? 'bg-white/[0.08] text-white shadow-sm' : 'text-white/40 hover:text-white/80 hover:bg-white/[0.04]'} ${tab === 'add' ? '!bg-green-600/15 !text-green-400 hover:!bg-green-600/25' : ''}`}>
+                    {tab === 'all' ? 'All' : tab === 'pending' ? 'Pending' : 'Add Friend'}
+                    {tab === 'all' && (
+                      <span className={`ml-1.5 ${friendsTab === tab ? 'bg-white/20 text-white' : 'bg-white/10 text-white/50'} text-[10px] font-bold rounded-full px-1.5 py-0.5 inline-flex items-center justify-center transition-colors`}>
+                        {friends.filter(f => !f.isAI).length}
+                      </span>
+                    )}
+                    {tab === 'pending' && (
+                      <span className={`ml-1.5 ${incomingRequests.length > 0 ? (friendsTab === tab ? 'bg-red-500 text-white' : 'bg-red-500/80 text-white/90') : (friendsTab === tab ? 'bg-white/20 text-white' : 'bg-white/10 text-white/50')} text-[10px] font-bold rounded-full px-1.5 py-0.5 inline-flex items-center justify-center transition-colors`}>
+                        {incomingRequests.length}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 discord-scrollbar">
+              {friendsTab === "all" && (
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-white/20 mb-3 px-2">All Friends — {friends.filter(f => !f.isAI).length}</p>
+                  {friends.filter(f => !f.isAI).map(f => (
+                    <div key={f.id} className="flex items-center justify-between p-2.5 rounded-lg hover:bg-white/[0.03] group border-t border-white/[0.04]">
+                      <div className="flex items-center gap-3">
+                        <div className="relative">
+                          <div className="w-9 h-9 rounded-full bg-white/[0.06] flex items-center justify-center text-sm font-bold text-white/40">{f.username[0].toUpperCase()}</div>
+                          <div className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-[#0a0a0c] transition-colors ${onlineUsers.has(f.id) ? 'bg-green-500' : 'bg-white/20'}`} />
                         </div>
-                        <p className="text-[7px] text-slate-600 uppercase font-black tracking-[0.2em] mt-1.5 flex items-center gap-1.5">
-                          {f.isAI ? (
-                            <>
-                              <span className="w-1 h-1 bg-indigo-500/50 rounded-full animate-pulse" />
-                              Synthetic Intelligence
-                            </>
-                          ) : (
-                            <>
-                              <span className="w-1 h-1 bg-white/10 rounded-full" />
-                              Encrypted Shard Protocol
-                            </>
-                          )}
-                        </p>
+                        <span className="text-[14px] font-medium text-white/80">{f.username}</span>
                       </div>
-                    </button>
-                  ))}
-                  {!friends.length && (
-                    <div className="bg-white/[0.02] border border-dashed border-white/5 rounded-3xl p-10 text-center space-y-3">
-                      <div className="w-12 h-12 bg-white/[0.03] rounded-2xl flex items-center justify-center mx-auto text-white/20">
-                        <MessageSquare size={24} strokeWidth={1} />
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => { setActiveChat(f); setMobileSidebarOpen(false); }} className="p-2 rounded-full bg-white/[0.06] text-white/40 hover:text-white transition-colors"><MessageSquare size={16} /></button>
+                        <button onClick={() => removeFriend(f.id)} className="p-2 rounded-full bg-white/[0.06] text-white/40 hover:text-red-400 transition-colors"><UserMinus size={16} /></button>
                       </div>
-                      <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest">No Active Shards Found</p>
                     </div>
-                  )}
+                  ))}
+                  {friends.filter(f => !f.isAI).length === 0 && <div className="text-center py-16 text-white/15 text-sm">No friends yet. Go to "Add Friend" to find people.</div>}
                 </div>
-              </div>
-            )}
-
-            {activeTab === "search" && (
-              <div className="space-y-8">
-                <div className="bg-white/[0.03] border border-white/10 rounded-[1.5rem] flex items-center px-4 focus-within:border-indigo-500/30 focus-within:bg-white/[0.05] transition-all duration-300 ring-1 ring-transparent focus-within:ring-indigo-500/10 shadow-2xl">
-                  <Search size={18} className="text-white/20" />
-                  <input
-                    className="bg-transparent flex-1 p-5 outline-none text-sm font-medium placeholder:text-slate-600"
-                    placeholder="Search Matrix Nodes..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                  />
-                </div>
-
-                <div className="space-y-4">
-                  {(incomingRequests.length > 0 || outgoingRequests.length > 0) && (
-                    <>
-                      <div className="flex items-center justify-between px-2">
-                        <h3 className="text-[10px] font-black text-white/30 tracking-[0.4em] uppercase">
-                          Pending Transfers
-                        </h3>
-                        <div className="h-px flex-1 bg-white/5 ml-4" />
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {incomingRequests.map((r) => (
-                          <div
-                            key={`fri_in_${r.fromUserId}`}
-                            className="bg-amber-500/[0.03] p-5 rounded-3xl border border-amber-500/10 flex justify-between items-center gap-4 transition-all hover:border-amber-500/20"
-                          >
-                            <div>
-                              <p className="font-bold text-sm tracking-tight text-white/90">@{r.username}</p>
-                              <p className="text-[7px] uppercase tracking-[0.2em] text-amber-500/60 font-black mt-1">
-                                Incoming Node Invite
-                              </p>
-                            </div>
-                            <div className="flex gap-2">
-                              <button
-                                onClick={() => acceptFriendReq(r.fromUserId)}
-                                className="px-4 py-2 bg-green-500/10 border border-green-500/20 text-green-400 rounded-xl text-[9px] font-black uppercase hover:bg-green-500 hover:text-white transition-all shadow-lg shadow-green-500/5"
-                              >
-                                Accept
-                              </button>
-                              <button
-                                onClick={() => rejectFriendReq(r.fromUserId)}
-                                className="px-4 py-2 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-[9px] font-black uppercase hover:bg-red-500 hover:text-white transition-all shadow-lg shadow-red-500/5"
-                              >
-                                Reject
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-
-                        {outgoingRequests.map((r) => (
-                          <div
-                            key={`fri_out_${r.toUserId}`}
-                            className="bg-white/[0.02] p-5 rounded-3xl border border-white/5 flex justify-between items-center gap-4"
-                          >
-                            <div>
-                              <p className="font-bold text-sm tracking-tight text-white/80">@{r.username}</p>
-                              <p className="text-[7px] uppercase tracking-[0.2em] text-indigo-400/60 font-black mt-1">
-                                Pending Node Response
-                              </p>
-                            </div>
-                            <button
-                              onClick={() => unsendFriendReq(r.toUserId)}
-                              className="px-4 py-2 bg-red-500/10 border border-red-500/20 text-red-300 rounded-xl text-[9px] font-black uppercase hover:bg-red-500 hover:text-white transition-all"
-                            >
-                              Revoke
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between px-2">
-                    <h3 className="text-[10px] font-black text-white/30 tracking-[0.4em] uppercase">
-                      Discover Nodes
-                    </h3>
-                    <div className="h-px flex-1 bg-white/5 ml-4" />
-                  </div>
-                  <div className="grid gap-3">
-                    {discoveredUsers.map((u) => (
-                      <div
-                        key={u.id}
-                        className="bg-white/[0.015] p-5 rounded-[2rem] border border-white/[0.03] flex justify-between items-center group transition-all duration-300 hover:bg-white/[0.04] hover:border-white/10 ring-1 ring-transparent hover:ring-white/5 shadow-xl"
-                      >
-                        <div className="flex items-center gap-4">
-                          <div className="w-11 h-11 bg-white/[0.03] border border-white/10 rounded-2xl flex items-center justify-center font-black text-white/40 group-hover:scale-110 group-hover:border-white/20 transition-all duration-500">
-                            {u.username[0].toUpperCase()}
-                          </div>
-                          <span className="font-bold tracking-tight text-white/90">@{u.username}</span>
+              )}
+              {friendsTab === "pending" && (
+                <div>
+                  {incomingRequests.length > 0 && <>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-white/20 mb-3 px-2">Incoming — {incomingRequests.length}</p>
+                    {incomingRequests.map(r => (
+                      <div key={r.fromUserId} className="flex items-center justify-between p-2.5 rounded-lg hover:bg-white/[0.03] border-t border-white/[0.04]">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-full bg-amber-500/10 flex items-center justify-center text-sm font-bold text-amber-400">{r.username[0].toUpperCase()}</div>
+                          <div><p className="text-[14px] font-medium text-white/80">{r.username}</p><p className="text-[10px] text-amber-500/50">Incoming Request</p></div>
                         </div>
-                        <button
-                          onClick={() => sendFriendReq(u.id)}
-                          className="p-3 bg-white/[0.03] border border-white/10 rounded-xl text-green-500/70 hover:bg-green-500 hover:text-white hover:scale-110 transition-all duration-300 shadow-lg shadow-green-500/5 group-hover:animate-pulse"
-                        >
-                          <UserPlus size={18} strokeWidth={2.5} />
-                        </button>
+                        <div className="flex gap-1.5">
+                          <button onClick={() => acceptFriendReq(r.fromUserId)} className="px-3 py-1.5 bg-green-600/20 text-green-400 rounded-md text-xs font-bold hover:bg-green-600 hover:text-white transition-colors">Accept</button>
+                          <button onClick={() => rejectFriendReq(r.fromUserId)} className="px-3 py-1.5 bg-red-500/10 text-red-400 rounded-md text-xs font-bold hover:bg-red-500 hover:text-white transition-colors">Reject</button>
+                        </div>
                       </div>
                     ))}
-                    {!discoveredUsers.length && (
-                      <div className="bg-white/[0.01] border border-dashed border-white/5 rounded-3xl p-10 text-center">
-                        <p className="text-[10px] text-slate-600 uppercase font-black tracking-widest">No New Entities Found</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {activeTab === "groups" && (
-              <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-                <div className="bg-white/[0.02] border border-white/10 rounded-[2rem] p-6 space-y-4 shadow-2xl relative overflow-hidden group">
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 blur-3xl pointer-events-none" />
-                  <h3 className="text-[10px] font-black text-white/30 tracking-[0.4em] uppercase px-1">
-                    Initiate Group
-                  </h3>
-                  <div className="flex gap-3">
-                    <input
-                      className="flex-1 bg-white/[0.03] border border-white/5 p-4 rounded-2xl outline-none text-sm font-medium focus:border-indigo-500/30 focus:bg-white/[0.05] transition-all duration-300 placeholder:text-slate-600"
-                      placeholder="Protocol Name..."
-                      value={groupNameInput}
-                      onChange={(e) => setGroupNameInput(e.target.value)}
-                    />
-                    <button
-                      onClick={createGroup}
-                      disabled={isCreatingGroup}
-                      className="px-6 bg-indigo-600 rounded-2xl text-[10px] uppercase tracking-widest font-black hover:bg-indigo-500 transition-all duration-300 disabled:opacity-50 shadow-lg shadow-indigo-600/10 flex items-center justify-center gap-2"
-                    >
-                      {isCreatingGroup ? <Loader2 size={16} className="animate-spin text-white/50" /> : <Plus size={16} />}
-                      Create
-                    </button>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between px-2">
-                    <h3 className="text-[10px] font-black text-white/30 tracking-[0.4em] uppercase">
-                      My Protocol Groups
-                    </h3>
-                    <div className="h-px flex-1 bg-white/5 ml-4" />
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {myGroups.map((g) => (
-                      <div
-                        key={g.id}
-                        onClick={() => setActiveGroup(g)}
-                        className="w-full bg-white/[0.015] p-5 rounded-[2rem] border border-white/[0.03] flex justify-between items-center text-left hover:bg-white/[0.04] hover:border-white/10 transition-all duration-300 group active:scale-[0.98] ring-1 ring-transparent hover:ring-white/5 shadow-xl cursor-pointer"
-                      >
-                        <div className="flex items-center gap-5">
-                          <div className="w-12 h-12 bg-white/[0.03] border border-white/10 rounded-2xl flex items-center justify-center text-lg font-black text-white/40 group-hover:scale-110 group-hover:border-white/20 transition-all duration-500">
-                            #
-                          </div>
-                          <div>
-                            <p className="font-bold text-white/90 group-hover:text-white transition-colors tracking-tight">#{g.name}</p>
-                            <p className="text-[7px] uppercase tracking-[0.2em] text-slate-600 font-black mt-1.5 flex items-center gap-1.5">
-                              <span className="w-1 h-1 bg-white/10 rounded-full" />
-                              P2P Group Encrypted
-                            </p>
-                          </div>
+                  </>}
+                  {outgoingRequests.length > 0 && <>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-white/20 mb-3 mt-6 px-2">Outgoing — {outgoingRequests.length}</p>
+                    {outgoingRequests.map(r => (
+                      <div key={r.toUserId} className="flex items-center justify-between p-2.5 rounded-lg hover:bg-white/[0.03] border-t border-white/[0.04]">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-full bg-white/[0.06] flex items-center justify-center text-sm font-bold text-white/40">{r.username[0].toUpperCase()}</div>
+                          <div><p className="text-[14px] font-medium text-white/80">{r.username}</p><p className="text-[10px] text-indigo-400/50">Pending</p></div>
                         </div>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            leaveGroup(g.id);
-                          }}
-                          className="px-4 py-2 bg-red-500/10 border border-red-500/20 text-red-400/70 rounded-xl text-[9px] font-black uppercase hover:bg-red-500 hover:text-white transition-all shadow-lg shadow-red-500/5 group-hover:animate-in zoom-in duration-300"
-                        >
-                          Exit
-                        </button>
+                        <button onClick={() => unsendFriendReq(r.toUserId)} className="px-3 py-1.5 bg-red-500/10 text-red-400 rounded-md text-xs font-bold hover:bg-red-500 hover:text-white transition-colors">Cancel</button>
                       </div>
                     ))}
-                    {!myGroups.length && (
-                      <div className="bg-white/[0.01] border border-dashed border-white/5 rounded-3xl p-10 text-center">
-                        <p className="text-[10px] text-slate-600 uppercase font-black tracking-widest">No Active Groups Detected</p>
-                      </div>
-                    )}
-                  </div>
+                  </>}
+                  {!incomingRequests.length && !outgoingRequests.length && <div className="text-center py-16 text-white/15 text-sm">No pending friend requests</div>}
                 </div>
-              </div>
-            )}
+              )}
+              {friendsTab === "add" && (
+                <div>
+                  <div className="mb-6">
+                    <h3 className="text-sm font-semibold text-white/80 mb-1">Add Friend</h3>
+                    <p className="text-[13px] text-white/25 mb-4">Search users by their username.</p>
+                    <div className="flex items-center gap-2 bg-white/[0.04] border border-white/[0.06] rounded-lg px-4 py-3 focus-within:border-indigo-500/40 transition-colors">
+                      <input className="bg-transparent flex-1 text-sm outline-none text-white/80 placeholder:text-white/15" placeholder="Enter a username..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+                      <Search size={16} className="text-white/20" />
+                    </div>
+                  </div>
+                  {discoveredUsers.map(u => (
+                    <div key={u.id} className="flex items-center justify-between p-2.5 rounded-lg hover:bg-white/[0.03] border-t border-white/[0.04]">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-full bg-white/[0.06] flex items-center justify-center text-sm font-bold text-white/40">{u.username[0].toUpperCase()}</div>
+                        <span className="text-[14px] font-medium text-white/80">{u.username}</span>
+                      </div>
+                      <button onClick={() => sendFriendReq(u.id)} className="px-3 py-1.5 bg-indigo-600/20 text-indigo-400 rounded-md text-xs font-bold hover:bg-indigo-600 hover:text-white transition-colors">Send Request</button>
+                    </div>
+                  ))}
+                  {!discoveredUsers.length && searchQuery && <div className="text-center py-12 text-white/15 text-sm">No users found</div>}
+                </div>
+              )}
+            </div>
           </div>
         )}
-      </div>
-    </main>
+      </main>
 
-      {!activeChat && !activeGroup && (
-        <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-40">
-          <div className="bg-[#0a0c10]/40 backdrop-blur-3xl border border-white/10 rounded-[2.5rem] p-2 flex items-center gap-1 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.9)] ring-1 ring-white/5 relative">
-            {/* Sliding Indicator Background */}
-            <div 
-              className="absolute h-[calc(100%-16px)] bg-indigo-500/10 border border-indigo-500/20 rounded-2xl transition-all duration-500 cubic-bezier(0.4, 0, 0.2, 1) z-0 shadow-[0_0_15px_rgba(99,102,241,0.1)]"
-              style={{
-                width: '64px',
-                left: activeTab === 'chats' ? '8px' : activeTab === 'search' ? '76px' : '144px'
-              }}
-            />
-            
-            <button
-              onClick={() => setActiveTab("chats")}
-              className={`relative z-10 w-16 h-12 flex items-center justify-center transition-all duration-300 ${
-                activeTab === "chats" ? "text-indigo-400" : "text-slate-500 hover:text-slate-300"
-              }`}
-            >
-              <MessageSquare size={22} strokeWidth={activeTab === "chats" ? 2 : 1.5} />
-            </button>
-            <button
-              onClick={() => setActiveTab("search")}
-              className={`relative z-10 w-16 h-12 flex items-center justify-center transition-all duration-300 ${
-                activeTab === "search" ? "text-indigo-400" : "text-slate-500 hover:text-slate-300"
-              }`}
-            >
-              <Globe size={22} strokeWidth={activeTab === "search" ? 2 : 1.5} />
-            </button>
-            <button
-              onClick={() => setActiveTab("groups")}
-              className={`relative z-10 w-16 h-12 flex items-center justify-center transition-all duration-300 ${
-                activeTab === "groups" ? "text-indigo-400" : "text-slate-500 hover:text-slate-300"
-              }`}
-            >
-              <GroupsIcon size={22} strokeWidth={activeTab === "groups" ? 2 : 1.5} />
-            </button>
-          </div>
-        </div>
-      )}
-
+      {/* ─── Settings Modal ─── */}
       {showSettingsModal && (
-        <div className="fixed inset-0 z-[60] bg-black/95 backdrop-blur-3xl flex items-center justify-center p-6 animate-in fade-in duration-500">
-          <div className="bg-white/[0.03] border border-white/10 p-10 rounded-[3rem] w-full max-w-md md:max-w-2xl space-y-10 shadow-2xl relative overflow-hidden group">
-            <div className="absolute top-0 right-0 w-48 h-48 bg-indigo-500/5 blur-3xl pointer-events-none" />
-            
-            <div className="flex items-center justify-between relative z-10">
-              <div className="space-y-1">
-                <h3 className="text-[10px] font-black uppercase tracking-[0.5em] text-white/40">System Core</h3>
-                <p className="text-xl font-bold tracking-tight text-white">Preferences</p>
-              </div>
-              <button
-                onClick={() => setShowSettingsModal(false)}
-                className="p-3 text-white/20 hover:text-white transition-all duration-300 hover:bg-white/[0.05] rounded-2xl"
-              >
-                <X size={20} strokeWidth={1.5} />
-              </button>
+        <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-xl flex items-center justify-center p-6">
+          <div className="bg-[#1a1a1e] border border-white/10 p-8 rounded-2xl w-full max-w-md space-y-6 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div><h3 className="text-xs font-bold uppercase tracking-widest text-white/40">Settings</h3><p className="text-lg font-bold text-white mt-1">Preferences</p></div>
+              <button onClick={() => setShowSettingsModal(false)} className="p-2 text-white/20 hover:text-white transition-colors"><X size={18} /></button>
             </div>
-
-            <div className="space-y-6 relative z-10">
-              <div className="space-y-3">
-                <h4 className="text-[9px] font-black uppercase tracking-[0.3em] text-indigo-400/60 flex items-center gap-2 px-1">
-                  <Bell size={12} /> Communication Alerts
-                </h4>
-                <div className="grid gap-2">
-                  {notificationSettingRows.map((row) => (
-                    <button
-                      key={row.key}
-                      onClick={() => toggleNotificationPref(row.key)}
-                      className="w-full bg-white/[0.02] border border-white/5 rounded-2xl px-5 py-4 flex items-center justify-between text-left hover:bg-white/[0.04] hover:border-white/10 transition-all duration-300 group/item"
-                    >
-                      <div>
-                        <p className="text-sm font-bold text-white/80 group-hover/item:text-white transition-colors">{row.label}</p>
-                        <p className="text-[8px] uppercase tracking-[0.15em] text-white/20 mt-1 font-black">
-                          {row.description}
-                        </p>
-                      </div>
-                      <div className={`w-10 h-6 rounded-full transition-all duration-500 relative p-1 ${notificationPrefs[row.key] ? "bg-indigo-600 shadow-[0_0_15px_rgba(79,70,229,0.3)]" : "bg-white/5"}`}>
-                        <div className={`w-4 h-4 bg-white rounded-full transition-all duration-500 shadow-sm ${notificationPrefs[row.key] ? "translate-x-4" : "translate-x-0"}`} />
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <h4 className="text-[9px] font-black uppercase tracking-[0.3em] text-indigo-400/60 flex items-center gap-2 px-1">
-                  <Info size={12} /> Protocol Identity
-                </h4>
-                <div className="bg-white/[0.02] border border-white/5 rounded-3xl p-6 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-bold text-white/80">VaultID Secure Network</p>
-                      <p className="text-[8px] uppercase tracking-[0.2em] text-white/30 font-black mt-1">E2EE Protocol v2.4.0</p>
-                    </div>
-                    <div className="px-3 py-1 bg-green-500/10 border border-green-500/20 rounded-lg">
-                      <span className="text-[8px] font-black uppercase tracking-widest text-green-500">Live</span>
-                    </div>
+            <div className="space-y-2">
+              <h4 className="text-[10px] font-bold uppercase tracking-wider text-indigo-400/50 flex items-center gap-2 px-1"><Bell size={12} /> Notifications</h4>
+              {[{ key: "messages", label: "Messages" }, { key: "friendRequests", label: "Friend Requests" }, { key: "groupRequests", label: "Group Requests" }, { key: "sounds", label: "Sounds" }].map(r => (
+                <button key={r.key} onClick={() => setNotificationPrefs(p => ({ ...p, [r.key]: !p[r.key] }))}
+                  className="w-full bg-white/[0.03] rounded-lg px-4 py-3 flex items-center justify-between hover:bg-white/[0.05] transition-colors">
+                  <span className="text-sm text-white/70">{r.label}</span>
+                  <div className={`w-9 h-5 rounded-full transition-colors relative p-0.5 ${notificationPrefs[r.key] ? 'bg-indigo-600' : 'bg-white/10'}`}>
+                    <div className={`w-4 h-4 bg-white rounded-full transition-transform ${notificationPrefs[r.key] ? 'translate-x-4' : ''}`} />
                   </div>
-                  <p className="text-xs text-white/40 leading-relaxed font-medium">
-                    Privacy-first workspace for encrypted communication. Message payloads are secured via client-side P2P cipher mode.
-                  </p>
-                  <div className="pt-2 flex items-center justify-between border-t border-white/5">
-                    <span className="text-[8px] font-black uppercase tracking-[0.2em] text-white/20">Encryption Status</span>
-                    <span className="text-[8px] font-black uppercase tracking-[0.2em] text-indigo-400">Tactical Grade</span>
-                  </div>
-                </div>
-              </div>
+                </button>
+              ))}
             </div>
-
-            <div className="pt-4 text-center relative z-10">
-              <p className="text-[8px] font-black uppercase tracking-[0.4em] text-white/10 italic">
-                Secure Transmission • Zero-Log Architecture
-              </p>
+            <div className="bg-white/[0.03] rounded-lg p-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-white/70">VaultID Secure</p>
+                <span className="text-[10px] font-bold text-green-500 bg-green-500/10 px-2 py-0.5 rounded">Live</span>
+              </div>
+              <p className="text-[11px] text-white/25">E2EE Protocol • Zero-Log Architecture</p>
             </div>
           </div>
         </div>
       )}
 
       <style>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(79, 70, 229, 0.1); border-radius: 10px; }
-        @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
-        @keyframes zoom-in { from { transform: scale(0.95); } to { transform: scale(1); } }
-        .animate-in { animation: fade-in 0.3s ease-out, zoom-in 0.3s ease-out; }
+        .discord-scrollbar::-webkit-scrollbar { width: 6px; }
+        .discord-scrollbar::-webkit-scrollbar-track { background: transparent; margin: 4px 0; }
+        .discord-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 3px; }
+        .discord-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.1); }
+
+        /* Mobile PWA optimizations */
+        * { -webkit-tap-highlight-color: transparent; }
+        html, body { overscroll-behavior: none; touch-action: pan-y; }
+        body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+        input, textarea { font-size: 16px !important; } /* Prevents iOS zoom on focus */
+        @media (max-width: 768px) {
+          .discord-scrollbar::-webkit-scrollbar { width: 0px; } /* Hide scrollbar on mobile */
+        }
+
+        /* Safe area insets for notched phones */
+        .safe-top { padding-top: env(safe-area-inset-top, 0px); }
+        .safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
+
+        /* Smooth view transitions */
+        .mobile-view-transition {
+          animation: mobileSlideIn 0.2s ease-out;
+        }
+        @keyframes mobileSlideIn {
+          from { opacity: 0.8; transform: translateX(8px); }
+          to { opacity: 1; transform: translateX(0); }
+        }
+
+        /* Dynamic viewport height for mobile browsers */
+        @supports (height: 100dvh) {
+          .h-\\[100dvh\\] { height: 100dvh; }
+        }
+
+        /* Improved touch targets */
+        @media (max-width: 768px) {
+          .h-13 { height: 3.25rem; }
+        }
       `}</style>
     </div>
   );

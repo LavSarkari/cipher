@@ -67,17 +67,18 @@ export const api = {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return { friends: [] };
 
-    const { data, error } = await supabase
-      .from('friendships')
-      .select('friend_id, u:friend_id(username)')
-      .eq('user_id', user.id);
+    // Query both directions to handle partial inserts
+    const [asUser, asFriend] = await Promise.all([
+      supabase.from('friendships').select('friend_id, u:friend_id(username)').eq('user_id', user.id),
+      supabase.from('friendships').select('user_id, u:user_id(username)').eq('friend_id', user.id)
+    ]);
 
-    if (error) throw error;
+    const friendMap = new Map();
+    (asUser.data || []).forEach(f => friendMap.set(f.friend_id, f.u?.username || 'Unknown Node'));
+    (asFriend.data || []).forEach(f => friendMap.set(f.user_id, f.u?.username || 'Unknown Node'));
+
     return {
-      friends: (data || []).map(f => ({
-        id: f.friend_id,
-        username: f.u?.username || 'Unknown Node'
-      }))
+      friends: Array.from(friendMap.entries()).map(([id, username]) => ({ id, username }))
     };
   },
 
@@ -135,11 +136,9 @@ export const api = {
   acceptFriendRequest: async (fromUserId) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
-    await supabase.from('friend_requests').delete().eq('from_user_id', fromUserId).eq('to_user_id', user.id);
-    await supabase.from('friendships').insert([
-      { user_id: user.id, friend_id: fromUserId },
-      { user_id: fromUserId, friend_id: user.id }
-    ]);
+    // Use server-side function to insert both friendship directions
+    const { error } = await supabase.rpc('accept_friend_request', { requester_id: fromUserId });
+    if (error) throw error;
     return { ok: true };
   },
 
@@ -186,12 +185,17 @@ export const api = {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return { messages: [] };
     const chatId = [user.id, peerId].sort().join(':');
-    const { data, error } = await supabase.from('messages').select('*').eq('chat_id', chatId).order('created_at', { ascending: true });
+    const { data, error } = await supabase.from('messages')
+      .select('*, u1:sender_id(username), u2:reply_to_id(ciphertext, iv, sender_id(username))')
+      .eq('chat_id', chatId).order('created_at', { ascending: true });
     if (error) throw error;
-    return { messages: (data || []).map(m => ({ ...m, timestamp: m.created_at, senderId: m.sender_id, receiverId: m.receiver_id })) };
+    return { messages: (data || []).map(m => ({ 
+      ...m, timestamp: m.created_at, senderId: m.sender_id, receiverId: m.receiver_id,
+      replyTo: m.u2 ? { ciphertext: m.u2.ciphertext, iv: m.u2.iv, senderUsername: m.u2.sender_id?.username } : null
+    }))};
   },
 
-  sendMessage: async (peerId, payload) => {
+  sendMessage: async (peerId, payload, replyToId = null) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Session expired");
     const chatId = [user.id, peerId].sort().join(':');
@@ -201,20 +205,43 @@ export const api = {
       sender_id: user.id,
       receiver_id: peerId,
       ciphertext: payload.ciphertext,
-      iv: payload.iv
+      iv: payload.iv,
+      reply_to_id: replyToId
     };
     const { error } = await supabase.from('messages').insert(msg);
     if (error) throw error;
-    return { message: { ...msg, timestamp: msg.created_at, senderId: msg.sender_id, receiverId: msg.receiver_id } };
+    return { message: { ...msg, timestamp: new Date().toISOString(), senderId: msg.sender_id, receiverId: msg.receiver_id, reactions: {} } };
+  },
+
+  editMessage: async (msgId, payload) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Session expired");
+    const { error } = await supabase.from('messages')
+      .update({ ciphertext: payload.ciphertext, iv: payload.iv, edited_at: new Date().toISOString() })
+      .eq('id', msgId).eq('sender_id', user.id);
+    if (error) throw error;
+    return { ok: true };
+  },
+
+  reactToMessage: async (msgId, reactionsJson) => {
+    // Only logged in users can see/update, handled by RLS
+    const { error } = await supabase.from('messages').update({ reactions: reactionsJson }).eq('id', msgId);
+    if (error) throw error;
+    return { ok: true };
   },
 
   groupMessages: async (groupId) => {
-    const { data, error } = await supabase.from('group_messages').select('*, u:sender_id(username)').eq('group_id', groupId).order('created_at', { ascending: true });
+    const { data, error } = await supabase.from('group_messages')
+      .select('*, u:sender_id(username), u2:reply_to_id(ciphertext, iv, sender_id(username))')
+      .eq('group_id', groupId).order('created_at', { ascending: true });
     if (error) throw error;
-    return { messages: (data || []).map(m => ({ ...m, senderUsername: m.u?.username || 'Unknown', timestamp: m.created_at, senderId: m.sender_id })) };
+    return { messages: (data || []).map(m => ({ 
+      ...m, senderUsername: m.u?.username || 'Unknown', timestamp: m.created_at, senderId: m.sender_id,
+      replyTo: m.u2 ? { ciphertext: m.u2.ciphertext, iv: m.u2.iv, senderUsername: m.u2.sender_id?.username } : null
+    }))};
   },
 
-  sendGroupMessage: async (groupId, payload) => {
+  sendGroupMessage: async (groupId, payload, replyToId = null) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Session expired");
     const msg = {
@@ -222,10 +249,27 @@ export const api = {
       group_id: groupId,
       sender_id: user.id,
       ciphertext: payload.ciphertext,
-      iv: payload.iv
+      iv: payload.iv,
+      reply_to_id: replyToId
     };
     const { error } = await supabase.from('group_messages').insert(msg);
     if (error) throw error;
-    return { message: { ...msg, timestamp: msg.created_at, senderId: msg.sender_id } };
+    return { message: { ...msg, timestamp: new Date().toISOString(), senderId: msg.sender_id, reactions: {} } };
+  },
+
+  editGroupMessage: async (msgId, payload) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Session expired");
+    const { error } = await supabase.from('group_messages')
+      .update({ ciphertext: payload.ciphertext, iv: payload.iv, edited_at: new Date().toISOString() })
+      .eq('id', msgId).eq('sender_id', user.id);
+    if (error) throw error;
+    return { ok: true };
+  },
+
+  reactToGroupMessage: async (msgId, reactionsJson) => {
+    const { error } = await supabase.from('group_messages').update({ reactions: reactionsJson }).eq('id', msgId);
+    if (error) throw error;
+    return { ok: true };
   }
 };
