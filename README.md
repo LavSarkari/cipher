@@ -1,36 +1,92 @@
-# Vault Secure Re-Architecture
+# <p align="center"><img src="frontend/public/logo.png" width="128" alt="Cipher Logo"><br>CIPHER</p>
 
-This project is split into three isolated layers:
+<p align="center">
+  <strong>Encrypted. Minimalist. Private.</strong><br>
+  <em>The next-generation secure messaging platform built for the elite.</em>
+</p>
 
-- `frontend/` React UI (same visual style/feature flow)
-- `backend/` Express API with secure auth and authorization checks
-- `database/` SQL schema for users, friendships, and encrypted messages
+<p align="center">
+  <img src="https://img.shields.io/badge/Security-E2EE-indigo?style=for-the-badge" alt="E2EE">
+  <img src="https://img.shields.io/badge/Database-Supabase-blue?style=for-the-badge" alt="Supabase">
+  <img src="https://img.shields.io/badge/Language-Javascript-yellow?style=for-the-badge" alt="JS">
+  <img src="https://img.shields.io/badge/UI-React-61dafb?style=for-the-badge" alt="React">
+</p>
 
-## Security upgrades implemented
+---
 
-- Removed plaintext passwords, replaced with `argon2id` hashing.
-- Removed weak custom crypto, replaced with browser `Web Crypto` (`PBKDF2 + AES-256-GCM`) and per-message random IV.
-- Messages are encrypted on client before upload. Server stores only ciphertext + IV.
-- Added `httpOnly` session cookie, CSRF protection, `helmet`, CORS policy, and rate limiting.
-- Added strict server-side validation with `zod`.
-- Added access control for chats (only friends can read/send).
+## 🔒 Zero-Trust Architecture
 
-## Run
+**Cipher** is engineered from the ground up with a zero-trust mindset. Unlike standard messaging apps, we never see your data. Your messages are encrypted long before they ever touch our infrastructure.
 
-1. Copy env files:
-   - `backend/.env.example -> backend/.env`
-   - `frontend/.env.example -> frontend/.env`
-2. Install dependencies separately in `backend/` and `frontend/`.
-3. Start backend on `:4000` and frontend on `:5173`.
+### The Security Stack
+- **Web Crypto API**: Industry-standard high-performance primitives.
+- **PBKDF2**: Key derivation with 100,000 iterations for bulletproof passkeys.
+- **AES-256-GCM**: Military-grade symmetric encryption with random initialization vectors (IV) for every single message.
+- **Zero-Log Store**: Our database only holds ciphertext. Without your local shared key, even our admins are blind.
 
-## Important security note
+---
 
-`100% secure` is not technically achievable in any real-world app. This build is a strong baseline, but production hardening should also include:
+## 🔥 Key Features
 
-- HTTPS everywhere with HSTS
-- refresh-token rotation / session revocation store
-- dependency scanning + SAST/DAST
-- key backup/recovery strategy
-- independent security audit and pentest
+- **⚡ Real-time Pulse**: Instant message delivery using Supabase real-time event bus.
+- **👥 Dynamic Groups**: Create, join, and manage private groups with shared encryption contexts.
+- **🤖 Gemini AI Integration**: A secure AI relay for assistant-based queries within the app.
+- **🌑 Stealth Mode UI**: A premium, high-contrast dark theme optimized for focused communication.
+- **📱 PWA Ready**: Install Cipher directly to your home screen for a native, zero-friction experience.
+- **⌨️ Discord-Style Interaction**: Familiar commands, typing indicators, and message grouping logic.
 
-Also, this does **not** implement the full Signal protocol used by WhatsApp. It uses strong modern primitives, but protocol parity with WhatsApp/Telegram requires significantly more infrastructure and cryptographic state management.
+---
+
+## 🛠️ Technical Overview
+
+### Message Flow (E2EE)
+
+```mermaid
+sequenceDiagram
+    participant UserA as Sender (Alice)
+    participant DB as Supabase (Encrypted Store)
+    participant UserB as Receiver (Bob)
+
+    Note over UserA, UserB: Shared Passkey established offline
+    UserA->>UserA: Plaintext + Passkey -> AES-256-GCM
+    UserA->>DB: POST ciphertext + IV
+    DB-->>UserB: Real-time Broadcast (Ciphertext)
+    UserB->>UserB: Ciphertext + IV + Passkey -> Plaintext
+    Note right of UserB: Message Decrypted
+```
+
+### Folder Structure
+- `frontend/`: React + Vite application (The Cipher Client).
+- `database/`: SQL scripts for the Supabase schema and RLS policies.
+- `backend_legacy/`: Archive of the legacy node-based backend.
+
+---
+
+## 🚀 Getting Started
+
+1.  **Environment Setup**:
+    - Copy `frontend/.env.example` to `frontend/.env`.
+    - Populate with your Supabase credentials.
+2.  **Install Dependencies**:
+    ```bash
+    cd frontend && npm install
+    ```
+3.  **Run Development**:
+    ```bash
+    npm run dev
+    ```
+
+---
+
+## 🛡️ Security Best Practices
+
+Cipher is a robust baseline for private communication. For production deployment, always ensure:
+- **HTTPS Everywhere**: Mandatory for Web Crypto API.
+- **Key Rotation**: Implement periodic passkey updates for maximum security.
+- **HSTS**: High Security Transport Headers should be enabled on the server.
+
+---
+
+<p align="center">
+  Developed with focus and precision by <strong>Antigravity</strong>.
+</p>
