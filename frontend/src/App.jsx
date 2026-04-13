@@ -31,12 +31,19 @@ const KeyModal = ({ title, onClose, onSubmit }) => {
           <h3 className="text-xs font-bold uppercase tracking-widest text-white/50">{title}</h3>
           <p className="text-[11px] text-amber-500/60 mt-1">Enter your shared encryption passkey</p>
         </div>
-        <input
-          className="w-full bg-white/[0.05] border border-white/10 p-4 rounded-xl outline-none text-center text-base tracking-widest focus:border-amber-500/40 transition-all"
-          type="password" autoFocus placeholder="••••••••" value={value} autoComplete="off"
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") onSubmit(value); if (e.key === "Escape") onClose(); }}
-        />
+        <form onSubmit={(e) => { e.preventDefault(); onSubmit(value); }} className="space-y-6">
+          {/* Junk inputs to bait browser autofill */}
+          <input type="text" name="username" style={{ display: 'none' }} autoComplete="username" tabIndex="-1" />
+          <input type="password" name="password" style={{ display: 'none' }} autoComplete="current-password" tabIndex="-1" />
+          
+          <input
+            className="w-full bg-white/[0.05] border border-white/10 p-4 rounded-xl outline-none text-center text-base tracking-widest focus:border-amber-500/40 transition-all font-mono"
+            type="password" autoFocus placeholder="••••••••" value={value} 
+            autoComplete="new-password" name={`passkey_${Math.random().toString(36).substring(7)}`}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") onSubmit(value); if (e.key === "Escape") onClose(); }}
+          />
+        </form>
         <div className="flex gap-3">
           <button onClick={onClose} className="flex-1 py-3.5 rounded-xl text-xs uppercase tracking-widest font-bold text-white/30 active:bg-white/5 transition-colors">Cancel</button>
           <button onClick={() => onSubmit(value)} className="flex-1 bg-amber-600 rounded-xl py-3.5 text-xs uppercase tracking-widest font-bold active:bg-amber-700 transition-colors">Unlock</button>
