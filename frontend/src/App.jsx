@@ -419,6 +419,7 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
         <form onSubmit={send} className={`bg-white/[0.04] rounded-xl px-3 md:px-4 flex items-center border ${replyTo || editingMsg ? 'border-t-0 rounded-t-none' : 'border-white/[0.06]'} focus-within:border-white/10 transition-colors`}>
           {!isUnlocked && <button type="button" onClick={() => setShowKey(true)} className="p-2.5 -ml-1 text-amber-500 active:text-amber-400"><Lock size={20} /></button>}
           <input ref={inputRef} disabled={!isUnlocked || isSending} autoComplete="off"
+            spellCheck="false" autoCorrect="off" autoCapitalize="off"
             className="flex-1 bg-transparent py-3.5 text-[16px] md:text-[15px] outline-none text-white/80 placeholder:text-white/20 disabled:opacity-30"
             placeholder={isUnlocked ? `Message @${activeChat.username}` : "Tap 🔑 to unlock"} value={input} onChange={(e) => setInput(e.target.value)} />
           {isUnlocked && <button type="submit" disabled={!input.trim() || isSending} className="p-2.5 text-white/30 active:text-indigo-400 disabled:opacity-20 transition-colors">
@@ -661,6 +662,7 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
         <form onSubmit={send} className={`bg-white/[0.04] rounded-xl px-3 md:px-4 flex items-center border ${replyTo || editingMsg ? 'border-t-0 rounded-t-none' : 'border-white/[0.06]'} focus-within:border-white/10 transition-colors`}>
           {!isUnlocked && <button type="button" onClick={() => setShowKey(true)} className="p-2 -ml-1 text-amber-500"><Lock size={18} /></button>}
           <input ref={inputRef} disabled={!isUnlocked || isSending} autoComplete="off"
+            spellCheck="false" autoCorrect="off" autoCapitalize="off"
             className="flex-1 bg-transparent py-3 text-[15px] outline-none text-white/80 placeholder:text-white/20 disabled:opacity-30"
             placeholder={isUnlocked ? `Message #${activeGroup.name}` : "Enter passkey to unlock"} value={input} onChange={(e) => setInput(e.target.value)} />
           {isUnlocked && <button type="submit" disabled={!input.trim() || isSending} className="p-2 text-white/30 hover:text-indigo-400 disabled:opacity-20">
