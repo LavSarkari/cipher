@@ -97,9 +97,16 @@ const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextM
 
   let lastTap = 0;
   const handleTap = (e) => {
+    if (!isUnlocked) { onReply({ openKeyPrompt: true }); return; }
     const now = Date.now();
     if (now - lastTap < 300) onReply(msg);
     lastTap = now;
+  };
+
+  const getGarbage = (text) => {
+    if (!text) return "eW91X2FyZV9ub3RfbWVhbnRfdG9fcmVhZDF0aGlzCg==";
+    // Return a sliced version of the ciphertext to look like real encrypted data
+    return text.substring(0, 60) + "...";
   };
 
   const replyBanner = isFirst && msg.replyTo && (
@@ -134,7 +141,11 @@ const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextM
           )}
           
           <p className="text-[15px] text-white/[0.75] leading-[1.625] mt-0.5">
-            {isUnlocked && msg.plaintext ? msg.plaintext : <span className="italic text-white/20">🔒 Encrypted{msg.id ? ' message' : ''}</span>}
+            {isUnlocked && msg.plaintext ? msg.plaintext : (
+              <span className="font-mono text-[12.5px] text-white/20 break-all select-none opacity-60 tracking-tighter leading-relaxed italic">
+                {isUnlocked ? "⚠️ Decryption Failed (Wrong Key?)" : getGarbage(msg.ciphertext)}
+              </span>
+            )}
             {msg.edited_at && <span className="text-[10px] text-white/30 ml-2">(edited)</span>}
           </p>
 
@@ -175,6 +186,7 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
 
   useEffect(() => {
     setRawMessages([]); setMessages([]); setIsUnlocked(false); setChatKey(""); setInput("");
+    decryptCache.current.clear();
   }, [activeChat.id]);
 
   useEffect(() => {
@@ -309,8 +321,17 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
     setContextMenu({ x: e.clientX, y: e.clientY, msg, isOwn: msg.senderId === me.id });
   };
 
-  const handleReply = (msg) => { setReplyTo(msg); inputRef.current?.focus(); };
-  const handleEdit = (msg) => { setEditingMsg(msg); setInput(msg.plaintext || ""); inputRef.current?.focus(); };
+  const handleReply = (msg) => { 
+    if (msg?.openKeyPrompt) { setShowKey(true); return; }
+    setReplyTo(msg); 
+    inputRef.current?.focus(); 
+  };
+  const handleEdit = (msg) => { 
+    if (!isUnlocked) { setShowKey(true); return; }
+    setEditingMsg(msg); 
+    setInput(msg.plaintext || ""); 
+    inputRef.current?.focus(); 
+  };
 
 
 
@@ -341,7 +362,15 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
           </div>
           <h2 className="text-xl font-bold text-white">{activeChat.username}</h2>
           <p className="text-sm text-white/30 mt-1">This is the beginning of your direct message history with <strong className="text-white/50">@{activeChat.username}</strong>.</p>
-          {!isUnlocked && <p className="text-xs text-amber-500/60 mt-2 flex items-center gap-1.5"><Lock size={12} /> Messages are end-to-end encrypted. Enter your passkey to decrypt.</p>}
+          {!isUnlocked && (
+            <div className="mt-4 p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl space-y-3">
+              <div className="flex items-center gap-2 text-amber-500 font-bold text-xs uppercase tracking-wider">
+                <Lock size={14} /> End-to-End Encrypted
+              </div>
+              <p className="text-xs text-white/40 leading-relaxed">Messages in this chat are securely scrambled. You must enter the shared passkey to reveal the conversation.</p>
+              <button onClick={() => setShowKey(true)} className="w-full bg-amber-500/20 hover:bg-amber-500/30 text-amber-500 py-2 rounded-lg text-xs font-bold transition-all border border-amber-500/20">Enter Unlock Passkey</button>
+            </div>
+          )}
           <div className="h-px bg-white/[0.06] mt-6" />
         </div>
         {msgGroups.map((g, gi) => (
@@ -418,7 +447,7 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
   const inputRef = useRef(null);
   const chatId = useMemo(() => groupChatIdFor(activeGroup.id), [activeGroup.id]);
 
-  useEffect(() => { setRawMessages([]); setMessages([]); setIsUnlocked(false); setChatKey(""); setInput(""); }, [activeGroup.id]);
+  useEffect(() => { setRawMessages([]); setMessages([]); setIsUnlocked(false); setChatKey(""); setInput(""); decryptCache.current.clear(); }, [activeGroup.id]);
 
   useEffect(() => {
     let stopped = false;
@@ -457,6 +486,18 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
   const [contextMenu, setContextMenu] = useState(null);
   const [replyTo, setReplyTo] = useState(null);
   const [editingMsg, setEditingMsg] = useState(null);
+
+  const handleReply = (msg) => { 
+    if (msg?.openKeyPrompt) { setShowKey(true); return; }
+    setReplyTo(msg); 
+    inputRef.current?.focus(); 
+  };
+  const handleEdit = (msg) => { 
+    if (!isUnlocked) { setShowKey(true); return; }
+    setEditingMsg(msg); 
+    setInput(msg.plaintext || ""); 
+    inputRef.current?.focus(); 
+  };
 
   useEffect(() => {
     sendTypingEvent(input.length > 0);
@@ -564,6 +605,15 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
           <div className="w-20 h-20 rounded-full bg-white/[0.08] flex items-center justify-center mb-4 text-3xl font-bold text-white/40">#</div>
           <h2 className="text-xl font-bold text-white">Welcome to #{activeGroup.name}</h2>
           <p className="text-sm text-white/30 mt-1">This is the start of the <strong className="text-white/50">#{activeGroup.name}</strong> group.</p>
+          {!isUnlocked && (
+            <div className="mt-4 p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl space-y-3">
+              <div className="flex items-center gap-2 text-amber-500 font-bold text-xs uppercase tracking-wider">
+                <Lock size={14} /> End-to-End Encrypted
+              </div>
+              <p className="text-xs text-white/40 leading-relaxed">Group messages are securely scrambled. You must enter the shared passkey to reveal the conversation.</p>
+              <button onClick={() => setShowKey(true)} className="w-full bg-amber-500/20 hover:bg-amber-500/30 text-amber-500 py-2 rounded-lg text-xs font-bold transition-all border border-amber-500/20">Enter Group Passkey</button>
+            </div>
+          )}
           <div className="h-px bg-white/[0.06] mt-6" />
         </div>
         {msgGroups.map((g, gi) => (

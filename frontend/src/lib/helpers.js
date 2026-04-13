@@ -18,6 +18,11 @@ export const groupMessages = (messages) => {
   let cur = null;
   for (const msg of messages) {
     const t = new Date(msg.timestamp).getTime();
+    if (isNaN(t)) {
+        // Fallback for real-time messages that might have slightly different timestamp formats
+        const same = cur?.senderId === msg.senderId;
+        if (same) { cur.messages.push(msg); continue; }
+    }
     const same = cur?.senderId === msg.senderId;
     const near = cur && (t - cur.lastTime) < 5 * 60 * 1000;
     const sameDay = cur && new Date(cur.lastTime).toDateString() === new Date(t).toDateString();
@@ -25,7 +30,7 @@ export const groupMessages = (messages) => {
       cur.messages.push(msg);
       cur.lastTime = t;
     } else {
-      cur = { senderId: msg.senderId, senderUsername: msg.senderUsername, messages: [msg], firstTime: t, lastTime: t, newDay: !cur || !sameDay };
+      cur = { senderId: msg.senderId, senderUsername: msg.senderUsername, messages: [msg], firstTime: isNaN(t) ? Date.now() : t, lastTime: isNaN(t) ? Date.now() : t, newDay: !cur || !sameDay };
       groups.push(cur);
     }
   }
