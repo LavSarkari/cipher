@@ -1,57 +1,225 @@
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000/api";
+import { supabase } from './supabase';
 
-let csrfToken = "";
-
-const request = async (path, options = {}) => {
-  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-  if (csrfToken && ["POST", "PUT", "PATCH", "DELETE"].includes((options.method || "GET").toUpperCase())) {
-    headers["x-csrf-token"] = csrfToken;
-  }
-
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers,
-    credentials: "include"
-  });
-
-  if (res.status === 204) return null;
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.error || "Request failed");
-  }
-
-  if (data.csrfToken) csrfToken = data.csrfToken;
-  return data;
-};
+/**
+ * Robust Supabase API layer.
+ * Includes defensive checks to prevent crashes when data is partially synced.
+ */
 
 export const api = {
-  getCsrf: () => request("/auth/csrf"),
-  register: (payload) => request("/auth/register", { method: "POST", body: JSON.stringify(payload) }),
-  login: (payload) => request("/auth/login", { method: "POST", body: JSON.stringify(payload) }),
-  me: () => request("/auth/me"),
-  logout: () => request("/auth/logout", { method: "POST" }),
-  users: (search) => request(`/users${search ? `?search=${encodeURIComponent(search)}` : ""}`),
-  friends: () => request("/friends"),
-  removeFriend: (targetId) => request(`/friends/${targetId}`, { method: "DELETE" }),
-  friendRequests: () => request("/friend-requests"),
-  sendFriendRequest: (targetId) => request(`/friend-requests/${targetId}`, { method: "POST" }),
-  unsendFriendRequest: (targetId) => request(`/friend-requests/${targetId}`, { method: "DELETE" }),
-  acceptFriendRequest: (fromUserId) =>
-    request(`/friend-requests/${fromUserId}/accept`, { method: "POST" }),
-  rejectFriendRequest: (fromUserId) =>
-    request(`/friend-requests/${fromUserId}/reject`, { method: "POST" }),
-  myGroups: () => request("/groups/mine"),
-  createGroup: (payload) => request("/groups", { method: "POST", body: JSON.stringify(payload) }),
-  leaveGroup: (groupId) => request(`/groups/${groupId}/leave`, { method: "DELETE" }),
-  groupFriendOptions: (groupId) => request(`/groups/${groupId}/friend-options`),
-  addFriendToGroup: (groupId, friendId) =>
-    request(`/groups/${groupId}/add-friend/${friendId}`, { method: "POST" }),
-  groupMessages: (groupId, before) =>
-    request(`/groups/${groupId}/messages${before ? `?before=${before}` : ""}`),
-  sendGroupMessage: (groupId, payload) =>
-    request(`/groups/${groupId}/messages`, { method: "POST", body: JSON.stringify(payload) }),
-  messages: (peerId, before) =>
-    request(`/chats/${peerId}/messages${before ? `?before=${before}` : ""}`),
-  sendMessage: (peerId, payload) =>
-    request(`/chats/${peerId}/messages`, { method: "POST", body: JSON.stringify(payload) })
+  getCsrf: async () => ({ csrfToken: "supabase_managed" }),
+
+  register: async ({ username, password }) => {
+    const email = `${username.toLowerCase()}@vault.id`;
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { username } }
+    });
+    if (error) throw error;
+    return { user: { id: data.user?.id, username } };
+  },
+
+  login: async ({ username, password }) => {
+    const email = `${username.toLowerCase()}@vault.id`;
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    return { user: { id: data.user?.id, username: username } };
+  },
+
+  me: async () => {
+    const { data: { user }, error } = await supabase.auth.getUser();
+    if (error || !user) throw new Error("Not authenticated");
+    
+    const { data: profile } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    return { user: profile || { id: user.id, username: user.email?.split('@')[0] || 'unknown' } };
+  },
+
+  logout: async () => {
+    await supabase.auth.signOut();
+  },
+
+  users: async (search) => {
+    let query = supabase.from('users').select('id, username');
+    if (search) query = query.ilike('username', `%${search}%`);
+    const { data, error } = await query.limit(40);
+    if (error) throw error;
+    return { users: data || [] };
+  },
+
+  friends: async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { friends: [] };
+
+    const { data, error } = await supabase
+      .from('friendships')
+      .select('friend_id, u:friend_id(username)')
+      .eq('user_id', user.id);
+
+    if (error) throw error;
+    return {
+      friends: (data || []).map(f => ({
+        id: f.friend_id,
+        username: f.u?.username || 'Unknown Node'
+      }))
+    };
+  },
+
+  removeFriend: async (targetId) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    await supabase
+      .from('friendships')
+      .delete()
+      .or(`and(user_id.eq.${user.id},friend_id.eq.${targetId}),and(user_id.eq.${targetId},friend_id.eq.${user.id})`);
+    return { ok: true };
+  },
+
+  friendRequests: async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { incoming: [], outgoing: [] };
+    
+    const [incoming, outgoing] = await Promise.all([
+      supabase.from('friend_requests').select('from_user_id, created_at, u:from_user_id(username)').eq('to_user_id', user.id),
+      supabase.from('friend_requests').select('to_user_id, created_at, u:to_user_id(username)').eq('from_user_id', user.id)
+    ]);
+
+    return {
+      incoming: (incoming.data || []).map(r => ({
+        fromUserId: r.from_user_id,
+        username: r.u?.username || 'Unknown',
+        createdAt: r.created_at
+      })),
+      outgoing: (outgoing.data || []).map(r => ({
+        toUserId: r.to_user_id,
+        username: r.u?.username || 'Unknown',
+        createdAt: r.created_at
+      }))
+    };
+  },
+
+  sendFriendRequest: async (targetId) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Session expired");
+    const { error } = await supabase.from('friend_requests').insert({
+      from_user_id: user.id,
+      to_user_id: targetId,
+      created_at: Date.now()
+    });
+    if (error) throw error;
+    return { ok: true };
+  },
+
+  unsendFriendRequest: async (targetId) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    await supabase.from('friend_requests').delete().eq('from_user_id', user.id).eq('to_user_id', targetId);
+    return { ok: true };
+  },
+
+  acceptFriendRequest: async (fromUserId) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    await supabase.from('friend_requests').delete().eq('from_user_id', fromUserId).eq('to_user_id', user.id);
+    const now = Date.now();
+    await supabase.from('friendships').insert([
+      { user_id: user.id, friend_id: fromUserId, created_at: now },
+      { user_id: fromUserId, friend_id: user.id, created_at: now }
+    ]);
+    return { ok: true };
+  },
+
+  rejectFriendRequest: async (fromUserId) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    await supabase.from('friend_requests').delete().eq('from_user_id', fromUserId).eq('to_user_id', user.id);
+    return { ok: true };
+  },
+
+  myGroups: async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { groups: [] };
+    const { data, error } = await supabase
+      .from('group_members')
+      .select('group_id, g:group_id(name)')
+      .eq('user_id', user.id);
+    
+    if (error) throw error;
+    return { groups: (data || []).filter(d => d.g).map(d => ({ id: d.group_id, name: d.g.name })) };
+  },
+
+  createGroup: async ({ name }) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Session expired");
+    const groupId = crypto.randomUUID();
+    
+    const { error: gError } = await supabase.from('groups').insert({
+      id: groupId,
+      name,
+      creator_id: user.id,
+      created_at: Date.now()
+    });
+    if (gError) throw gError;
+
+    await supabase.from('group_members').insert({
+      group_id: groupId,
+      user_id: user.id,
+      joined_at: Date.now()
+    });
+
+    return { ok: true };
+  },
+
+  messages: async (peerId) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { messages: [] };
+    const chatId = [user.id, peerId].sort().join(':');
+    const { data, error } = await supabase.from('messages').select('*').eq('chat_id', chatId).order('created_at', { ascending: true });
+    if (error) throw error;
+    return { messages: (data || []).map(m => ({ ...m, timestamp: m.created_at, senderId: m.sender_id, receiverId: m.receiver_id })) };
+  },
+
+  sendMessage: async (peerId, payload) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Session expired");
+    const chatId = [user.id, peerId].sort().join(':');
+    const msg = {
+      id: crypto.randomUUID(),
+      chat_id: chatId,
+      sender_id: user.id,
+      receiver_id: peerId,
+      ciphertext: payload.ciphertext,
+      iv: payload.iv,
+      created_at: Date.now()
+    };
+    const { error } = await supabase.from('messages').insert(msg);
+    if (error) throw error;
+    return { message: { ...msg, timestamp: msg.created_at, senderId: msg.sender_id, receiverId: msg.receiver_id } };
+  },
+
+  groupMessages: async (groupId) => {
+    const { data, error } = await supabase.from('group_messages').select('*, u:sender_id(username)').eq('group_id', groupId).order('created_at', { ascending: true });
+    if (error) throw error;
+    return { messages: (data || []).map(m => ({ ...m, senderUsername: m.u?.username || 'Unknown', timestamp: m.created_at, senderId: m.sender_id })) };
+  },
+
+  sendGroupMessage: async (groupId, payload) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Session expired");
+    const msg = {
+      id: crypto.randomUUID(),
+      group_id: groupId,
+      sender_id: user.id,
+      ciphertext: payload.ciphertext,
+      iv: payload.iv,
+      created_at: Date.now()
+    };
+    const { error } = await supabase.from('group_messages').insert(msg);
+    if (error) throw error;
+    return { message: { ...msg, timestamp: msg.created_at, senderId: msg.sender_id } };
+  }
 };
