@@ -569,9 +569,6 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
     setContextMenu({ x: extra.touchX || e.clientX, y: extra.touchY || e.clientY, msg, isOwn: extra.isOwn });
   };
 
-  const handleReply = (msg) => { setReplyTo(msg); inputRef.current?.focus(); };
-  const handleEdit = (msg) => { setEditingMsg(msg); setInput(msg.plaintext || ""); inputRef.current?.focus(); };
-
   const openAddFriend = async () => {
     setShowAddFriend(true); setLoadingFriends(true);
     try { const res = await api.groupFriendOptions(activeGroup.id); setAddableFriends(res.friends || []); } catch { setAddableFriends([]); } finally { setLoadingFriends(false); }
