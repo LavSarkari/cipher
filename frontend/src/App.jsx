@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   AlertCircle, Bell, ChevronLeft, Fingerprint, Info, Key, Loader2,
   LogOut, MessageSquare, Plus, Search, Send, Settings as SettingsIcon,
@@ -9,10 +9,11 @@ import {
 import { api } from "./lib/api";
 import { decryptMessage, encryptMessage } from "./crypto/e2ee";
 import { formatDiscordTime, formatDateSeparator, groupMessages } from "./lib/helpers";
-import { usePresence, useTypingIndicator } from "./lib/realtime";
+import { usePresence, useTypingIndicator, useMessageListener, useTableListener } from "./lib/realtime";
+import { saveMessages } from "./lib/db";
 
 const AI_USER = { id: "ai-999", username: "Gemini AI", isAI: true };
-const NOTIFICATION_PREFS_KEY = "vault_notification_prefs";
+const NOTIFICATION_PREFS_KEY = "cipher_notification_prefs";
 const DEFAULT_NOTIFICATION_PREFS = { messages: true, friendRequests: true, groupRequests: true, sounds: true };
 const chatIdFor = (a, b) => [a, b].sort().join(":");
 const groupChatIdFor = (gid) => `group:${gid}`;
@@ -86,6 +87,79 @@ const MessageContextMenu = ({ x, y, msg, isOwn, onClose, onReply, onEdit, onReac
   );
 };
 
+/* ─── Shared Message Item ─── */
+const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextMenu, onReply, onEdit, onReact }) => {
+  const isOwn = msg.senderId === me.id;
+  const longPress = useLongPress((e) => {
+    const touch = e.touches?.[0];
+    if (touch) onContextMenu(e, msg, { isOwn, touchX: touch.clientX, touchY: touch.clientY });
+  });
+
+  let lastTap = 0;
+  const handleTap = (e) => {
+    const now = Date.now();
+    if (now - lastTap < 300) onReply(msg);
+    lastTap = now;
+  };
+
+  const replyBanner = isFirst && msg.replyTo && (
+    <div className="flex items-center gap-1 text-[11px] text-white/40 mb-1 ml-13 mr-4 truncate relative">
+      <div className="absolute -left-7 top-1/2 w-6 h-4 border-l-2 border-t-2 border-white/20 rounded-tl-lg" />
+      <span className="font-semibold text-white/60">@{msg.replyTo.senderUsername}</span>
+      <span className="truncate">Encrypted referenced message</span>
+    </div>
+  );
+
+  return (
+    <div className={`group/msg relative pt-0.5 hover:bg-white/[0.02] ${isFirst ? 'mt-[17px]' : ''}`} 
+         onContextMenu={(e) => onContextMenu(e, msg, { isOwn })} {...longPress} onTouchEnd={handleTap} onClick={handleTap}>
+      {replyBanner}
+      <div className="flex gap-4 px-4 py-0.5">
+        {isFirst ? (
+          <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold flex-shrink-0 mt-0.5 ${isOwn ? 'bg-indigo-600/20 text-indigo-400' : 'bg-white/[0.08] text-white/40'}`}>
+            {groupItem.senderUsername?.[0]?.toUpperCase() || '?'}
+          </div>
+        ) : (
+          <div className="w-10 flex-shrink-0 flex items-center justify-center">
+            <span className="text-[10px] text-transparent group-hover/msg:text-white/20 font-mono transition-colors">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+          </div>
+        )}
+
+        <div className="flex-1 min-w-0">
+          {isFirst && (
+            <div className="flex items-baseline gap-2">
+              <span className={`font-semibold text-sm ${isOwn ? 'text-indigo-400' : 'text-white/90'}`}>{groupItem.senderUsername}</span>
+              <span className="text-[11px] text-white/20">{formatDiscordTime(groupItem.firstTime)}</span>
+            </div>
+          )}
+          
+          <p className="text-[15px] text-white/[0.75] leading-[1.625] mt-0.5">
+            {isUnlocked && msg.plaintext ? msg.plaintext : <span className="italic text-white/20">🔒 Encrypted{msg.id ? ' message' : ''}</span>}
+            {msg.edited_at && <span className="text-[10px] text-white/30 ml-2">(edited)</span>}
+          </p>
+
+          {msg.reactions && Object.keys(msg.reactions).length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1">
+              {Object.entries(msg.reactions).map(([emoji, users]) => (
+                <button key={emoji} onClick={(e) => { e.stopPropagation(); onReact(msg, emoji); }} className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] border ${users.includes(me.id) ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300' : 'bg-white/5 border-white/10 text-white/60'} hover:bg-white/10 transition-colors`}>
+                  <span>{emoji}</span>
+                  <span className="font-bold">{users.length}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        
+        <div className="absolute right-4 -top-2 hidden group-hover/msg:flex md:flex opacity-0 group-hover/msg:opacity-100 items-center bg-[#1a1a1e] border border-white/10 rounded-md shadow-lg overflow-hidden transition-opacity">
+          <button onClick={(e) => { e.stopPropagation(); onReply(msg); }} className="p-2 text-white/50 hover:bg-white/10 hover:text-white transition-colors"><CornerUpLeft size={16} /></button>
+          {isOwn && <button onClick={(e) => { e.stopPropagation(); onEdit(msg); }} className="p-2 text-white/50 hover:bg-white/10 hover:text-white transition-colors"><Edit2 size={16} /></button>}
+          <button onClick={(e) => { e.stopPropagation(); onContextMenu(e, msg, { isOwn }); }} className="p-2 text-white/50 hover:bg-white/10 hover:text-white transition-colors"><MoreHorizontal size={16} /></button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 /* ─── DM Chat Panel ─── */
 const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
   const [rawMessages, setRawMessages] = useState([]);
@@ -97,7 +171,7 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
   const [isSending, setIsSending] = useState(false);
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
-  const chatId = useMemo(() => chatIdFor(me.id, activeChat.id), [me.id, activeChat.id]);
+  const chatId = useMemo(() => (me?.id && activeChat?.id) ? chatIdFor(me.id, activeChat.id) : null, [me?.id, activeChat?.id]);
 
   useEffect(() => {
     setRawMessages([]); setMessages([]); setIsUnlocked(false); setChatKey(""); setInput("");
@@ -105,24 +179,41 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
 
   useEffect(() => {
     if (activeChat.isAI) {
-      try { setRawMessages(JSON.parse(localStorage.getItem(`vault_ai_${me.id}`) || "[]")); } catch { setRawMessages([]); }
+      try { setRawMessages(JSON.parse(localStorage.getItem(`cipher_ai_${me.id}`) || "[]")); } catch { setRawMessages([]); }
       return;
     }
     let stopped = false;
     const load = async () => {
       try {
         const res = await api.messages(activeChat.id);
-        if (!stopped) setRawMessages(prev => {
-          const ids = new Set(prev.map(m => m.id));
-          const fresh = (res.messages || []).filter(m => !ids.has(m.id));
-          return fresh.length ? [...prev, ...fresh] : prev;
-        });
+        if (!stopped) setRawMessages(res.messages || []);
       } catch {}
     };
     load();
-    const id = setInterval(load, 3000);
-    return () => { stopped = true; clearInterval(id); };
-  }, [activeChat.id, activeChat.isAI, me.id]);
+    return () => { stopped = true; };
+  }, [activeChat.id, activeChat.isAI, me?.id]);
+
+  useMessageListener(chatId, false, useCallback((payload) => {
+    if (payload.eventType === 'INSERT') {
+      const m = payload.new;
+      const formatted = { 
+        ...m, timestamp: m.created_at, senderId: m.sender_id, receiverId: m.receiver_id,
+        reactions: m.reactions || {}
+      };
+      setRawMessages(prev => {
+        if (prev.find(x => x.id === m.id)) return prev;
+        const next = [...prev, formatted];
+        saveMessages([formatted]); // Also cache the real-time arrival
+        return next;
+      });
+    } else if (payload.eventType === 'UPDATE') {
+      const m = payload.new;
+      setRawMessages(prev => prev.map(x => x.id === m.id ? { ...x, ...m, timestamp: m.created_at } : x));
+      saveMessages([{ ...m, timestamp: m.created_at }]);
+    } else if (payload.eventType === 'DELETE') {
+      setRawMessages(prev => prev.filter(x => x.id !== payload.old.id));
+    }
+  }, [me?.id, chatId]));
 
   const { typingUsers, sendTypingEvent } = useTypingIndicator(chatId, me);
   const [contextMenu, setContextMenu] = useState(null);
@@ -185,7 +276,7 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
         setInput(""); setIsSending(false); inputRef.current?.focus();
         setTimeout(async () => {
           const aiP = await encryptMessage({ plaintext: "AI relay active. Secure channel received.", passphrase: chatKey, chatId });
-          setRawMessages(prev => { const next = [...prev, { id: `local_${Date.now()}`, senderId: AI_USER.id, receiverId: me.id, ...aiP, timestamp: Date.now() }]; localStorage.setItem(`vault_ai_${me.id}`, JSON.stringify(next)); return next; });
+          setRawMessages(prev => { const next = [...prev, { id: `local_${Date.now()}`, senderId: AI_USER.id, receiverId: me.id, ...aiP, timestamp: Date.now() }]; localStorage.setItem(`cipher_ai_${me.id}`, JSON.stringify(next)); return next; });
         }, 1000 + Math.random() * 1000);
         return;
       }
@@ -218,87 +309,7 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
     setContextMenu({ x: e.clientX, y: e.clientY, msg, isOwn: msg.senderId === me.id });
   };
 
-  const MessageItem = ({ msg, isFirst, groupItem }) => {
-    const longPress = useLongPress((e) => {
-      // Get touch clientX/Y
-      const touch = e.touches?.[0];
-      if (touch) setContextMenu({ x: touch.clientX, y: touch.clientY, msg, isOwn: msg.senderId === me.id });
-    });
 
-    let lastTap = 0;
-    const handleTap = (e) => {
-      const now = Date.now();
-      if (now - lastTap < 300) {
-        setReplyTo(msg); inputRef.current?.focus();
-      }
-      lastTap = now;
-    };
-
-    const isOwn = msg.senderId === me.id;
-
-    // Optional reply banner if replying to a message
-    const replyBanner = isFirst && msg.replyTo && (
-      <div className="flex items-center gap-1 text-[11px] text-white/40 mb-1 ml-13 mr-4 truncate relative">
-        <div className="absolute -left-7 top-1/2 w-6 h-4 border-l-2 border-t-2 border-white/20 rounded-tl-lg" />
-        <span className="font-semibold text-white/60">@{msg.replyTo.senderUsername}</span>
-        <span className="truncate">{activeChat.isAI ? "AI msg fallback" : "Encrypted referenced message"}</span>
-      </div>
-    );
-
-    return (
-      <div className={`group/msg relative pt-0.5 hover:bg-white/[0.02] ${isFirst ? 'mt-[17px]' : ''}`} 
-           onContextMenu={(e) => handleContextMenu(e, msg)} {...longPress} onTouchEnd={handleTap} onClick={handleTap}>
-        
-        {/* Reply arrow if someone replied */}
-        {replyBanner}
-
-        <div className="flex gap-4 px-4 py-0.5">
-          {isFirst ? (
-            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold flex-shrink-0 mt-0.5 ${isOwn ? 'bg-indigo-600/20 text-indigo-400' : 'bg-white/[0.08] text-white/40'}`}>
-              {groupItem.senderUsername?.[0]?.toUpperCase() || '?'}
-            </div>
-          ) : (
-            <div className="w-10 flex-shrink-0 flex items-center justify-center">
-              <span className="text-[10px] text-transparent group-hover/msg:text-white/20 font-mono transition-colors">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-            </div>
-          )}
-
-          <div className="flex-1 min-w-0">
-            {isFirst && (
-              <div className="flex items-baseline gap-2">
-                <span className={`font-semibold text-sm ${isOwn ? 'text-indigo-400' : 'text-white/90'}`}>{groupItem.senderUsername}</span>
-                <span className="text-[11px] text-white/20">{formatDiscordTime(groupItem.firstTime)}</span>
-              </div>
-            )}
-            
-            <p className="text-[15px] text-white/[0.75] leading-[1.625] mt-0.5">
-              {isUnlocked && msg.plaintext ? msg.plaintext : <span className="italic text-white/20">🔒 Encrypted{msg.id ? ' message' : ''}</span>}
-              {msg.edited_at && <span className="text-[10px] text-white/30 ml-2">(edited)</span>}
-            </p>
-
-            {/* Reactions */}
-            {msg.reactions && Object.keys(msg.reactions).length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1">
-                {Object.entries(msg.reactions).map(([emoji, users]) => (
-                  <button key={emoji} onClick={(e) => { e.stopPropagation(); handleReact(msg, emoji); }} className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] border ${users.includes(me.id) ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300' : 'bg-white/5 border-white/10 text-white/60'} hover:bg-white/10 transition-colors`}>
-                    <span>{emoji}</span>
-                    <span className="font-bold">{users.length}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          
-          {/* Quick Actions (Desktop only) */}
-          <div className="absolute right-4 -top-2 hidden group-hover/msg:flex md:flex opacity-0 group-hover/msg:opacity-100 items-center bg-[#1a1a1e] border border-white/10 rounded-md shadow-lg overflow-hidden transition-opacity">
-            <button onClick={(e) => { e.stopPropagation(); setReplyTo(msg); inputRef.current?.focus(); }} className="p-2 text-white/50 hover:bg-white/10 hover:text-white transition-colors"><CornerUpLeft size={16} /></button>
-            {isOwn && <button onClick={(e) => { e.stopPropagation(); setEditingMsg(msg); setInput(msg.plaintext || ""); inputRef.current?.focus(); }} className="p-2 text-white/50 hover:bg-white/10 hover:text-white transition-colors"><Edit2 size={16} /></button>}
-            <button onClick={(e) => { e.stopPropagation(); handleContextMenu(e, msg); }} className="p-2 text-white/50 hover:bg-white/10 hover:text-white transition-colors"><MoreHorizontal size={16} /></button>
-          </div>
-        </div>
-      </div>
-    );
-  };
 
   const displayMessages = messages.map(m => ({ ...m, senderUsername: m.senderId === me.id ? me.username : activeChat.username }));
   const msgGroups = groupMessages(displayMessages);
@@ -333,9 +344,9 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
         {msgGroups.map((g, gi) => (
           <React.Fragment key={gi}>
             {g.newDay && <div className="flex items-center gap-4 px-4 my-4"><div className="flex-1 h-px bg-white/[0.06]" /><span className="text-[11px] font-semibold text-white/30">{formatDateSeparator(g.firstTime)}</span><div className="flex-1 h-px bg-white/[0.06]" /></div>}
-            <MessageItem msg={g.messages[0]} isFirst={true} groupItem={g} />
+            <SharedMessageItem msg={g.messages[0]} isFirst={true} groupItem={g} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} />
             {g.messages.slice(1).map(m => (
-              <MessageItem key={m.id} msg={m} />
+              <SharedMessageItem key={m.id} msg={m} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} />
             ))}
           </React.Fragment>
         ))}
@@ -411,12 +422,33 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
     const load = async () => {
       try {
         const res = await api.groupMessages(activeGroup.id);
-        if (!stopped) setRawMessages(prev => { const ids = new Set(prev.map(m => m.id)); const f = (res.messages || []).filter(m => !ids.has(m.id)); return f.length ? [...prev, ...f] : prev; });
+        if (!stopped) setRawMessages(res.messages || []);
       } catch { if (!stopped) setRawMessages([]); }
     };
-    load(); const id = setInterval(load, 3000);
-    return () => { stopped = true; clearInterval(id); };
+    load();
+    return () => { stopped = true; };
   }, [activeGroup.id]);
+
+  useMessageListener(activeGroup.id, true, useCallback((payload) => {
+    if (payload.eventType === 'INSERT') {
+      const m = payload.new;
+      const formatted = { 
+        ...m, timestamp: m.created_at, senderId: m.sender_id, reactions: m.reactions || {}
+      };
+      setRawMessages(prev => {
+        if (prev.find(x => x.id === m.id)) return prev;
+        const next = [...prev, formatted];
+        saveMessages([formatted]);
+        return next;
+      });
+    } else if (payload.eventType === 'UPDATE') {
+      const m = payload.new;
+      setRawMessages(prev => prev.map(x => x.id === m.id ? { ...x, ...m, timestamp: m.created_at } : x));
+      saveMessages([{ ...m, timestamp: m.created_at }]);
+    } else if (payload.eventType === 'DELETE') {
+      setRawMessages(prev => prev.filter(x => x.id !== payload.old.id));
+    }
+  }, [activeGroup.id]));
 
   const { typingUsers, sendTypingEvent } = useTypingIndicator(chatId, me);
   const [contextMenu, setContextMenu] = useState(null);
@@ -488,83 +520,13 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
     } catch (err) {}
   };
 
-  const handleContextMenu = (e, msg) => {
+  const handleContextMenu = (e, msg, extra = {}) => {
     e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY, msg, isOwn: msg.senderId === me.id });
+    setContextMenu({ x: extra.touchX || e.clientX, y: extra.touchY || e.clientY, msg, isOwn: extra.isOwn });
   };
 
-  const MessageItem = ({ msg, isFirst, groupItem }) => {
-    const longPress = useLongPress((e) => {
-      const touch = e.touches?.[0];
-      if (touch) setContextMenu({ x: touch.clientX, y: touch.clientY, msg, isOwn: msg.senderId === me.id });
-    });
-
-    let lastTap = 0;
-    const handleTap = () => {
-      const now = Date.now();
-      if (now - lastTap < 300) { setReplyTo(msg); inputRef.current?.focus(); }
-      lastTap = now;
-    };
-
-    const isOwn = msg.senderId === me.id;
-
-    const replyBanner = isFirst && msg.replyTo && (
-      <div className="flex items-center gap-1 text-[11px] text-white/40 mb-1 ml-13 mr-4 truncate relative">
-        <div className="absolute -left-7 top-1/2 w-6 h-4 border-l-2 border-t-2 border-white/20 rounded-tl-lg" />
-        <span className="font-semibold text-white/60">@{msg.replyTo.senderUsername}</span>
-        <span className="truncate">Encrypted referenced message</span>
-      </div>
-    );
-
-    return (
-      <div className={`group/msg relative pt-0.5 hover:bg-white/[0.02] ${isFirst ? 'mt-[17px]' : ''}`} 
-           onContextMenu={(e) => handleContextMenu(e, msg)} {...longPress} onTouchEnd={handleTap} onClick={handleTap}>
-        {replyBanner}
-        <div className="flex gap-4 px-4 py-0.5">
-          {isFirst ? (
-            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold flex-shrink-0 mt-0.5 ${isOwn ? 'bg-indigo-600/20 text-indigo-400' : 'bg-white/[0.08] text-white/40'}`}>
-              {groupItem.senderUsername?.[0]?.toUpperCase() || '?'}
-            </div>
-          ) : (
-            <div className="w-10 flex-shrink-0 flex items-center justify-center">
-              <span className="text-[10px] text-transparent group-hover/msg:text-white/20 font-mono transition-colors">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-            </div>
-          )}
-
-          <div className="flex-1 min-w-0">
-            {isFirst && (
-              <div className="flex items-baseline gap-2">
-                <span className={`font-semibold text-sm ${isOwn ? 'text-indigo-400' : 'text-white/90'}`}>{groupItem.senderUsername}</span>
-                <span className="text-[11px] text-white/20">{formatDiscordTime(groupItem.firstTime)}</span>
-              </div>
-            )}
-            
-            <p className="text-[15px] text-white/[0.75] leading-[1.625] mt-0.5">
-              {isUnlocked && msg.plaintext ? msg.plaintext : <span className="italic text-white/20">🔒 Encrypted{msg.id ? ' message' : ''}</span>}
-              {msg.edited_at && <span className="text-[10px] text-white/30 ml-2">(edited)</span>}
-            </p>
-
-            {msg.reactions && Object.keys(msg.reactions).length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1">
-                {Object.entries(msg.reactions).map(([emoji, users]) => (
-                  <button key={emoji} onClick={(e) => { e.stopPropagation(); handleReact(msg, emoji); }} className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] border ${users.includes(me.id) ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300' : 'bg-white/5 border-white/10 text-white/60'} hover:bg-white/10 transition-colors`}>
-                    <span>{emoji}</span>
-                    <span className="font-bold">{users.length}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          
-          <div className="absolute right-4 -top-2 hidden group-hover/msg:flex md:flex opacity-0 group-hover/msg:opacity-100 items-center bg-[#1a1a1e] border border-white/10 rounded-md shadow-lg overflow-hidden transition-opacity">
-            <button onClick={(e) => { e.stopPropagation(); setReplyTo(msg); inputRef.current?.focus(); }} className="p-2 text-white/50 hover:bg-white/10 hover:text-white transition-colors"><CornerUpLeft size={16} /></button>
-            {isOwn && <button onClick={(e) => { e.stopPropagation(); setEditingMsg(msg); setInput(msg.plaintext || ""); inputRef.current?.focus(); }} className="p-2 text-white/50 hover:bg-white/10 hover:text-white transition-colors"><Edit2 size={16} /></button>}
-            <button onClick={(e) => { e.stopPropagation(); handleContextMenu(e, msg); }} className="p-2 text-white/50 hover:bg-white/10 hover:text-white transition-colors"><MoreHorizontal size={16} /></button>
-          </div>
-        </div>
-      </div>
-    );
-  };
+  const handleReply = (msg) => { setReplyTo(msg); inputRef.current?.focus(); };
+  const handleEdit = (msg) => { setEditingMsg(msg); setInput(msg.plaintext || ""); inputRef.current?.focus(); };
 
   const openAddFriend = async () => {
     setShowAddFriend(true); setLoadingFriends(true);
@@ -729,7 +691,15 @@ const App = () => {
     })();
   }, []);
   useEffect(() => { if (me) loadNetwork(searchQuery).catch(() => {}); }, [me, searchQuery]);
-  useEffect(() => { if (!me) return; const id = setInterval(() => loadNetwork(searchQuery).catch(() => {}), 5000); return () => clearInterval(id); }, [me, searchQuery]);
+  
+  // Realtime list refresh (zero polling!)
+  const refresh = useCallback(() => loadNetwork(searchQuery).catch(() => {}), [searchQuery]);
+  useTableListener('friendships', 'user_id', me?.id, refresh);
+  useTableListener('friendships', 'friend_id', me?.id, refresh);
+  useTableListener('friend_requests', 'from_user_id', me?.id, refresh);
+  useTableListener('friend_requests', 'to_user_id', me?.id, refresh);
+  useTableListener('group_members', 'user_id', me?.id, refresh);
+  
   useEffect(() => { try { localStorage.setItem(NOTIFICATION_PREFS_KEY, JSON.stringify(notificationPrefs)); } catch {} }, [notificationPrefs]);
 
   const handleAuth = async (e) => {
@@ -776,9 +746,11 @@ const App = () => {
       <div className="w-full max-w-[400px] relative z-10">
         <div className="bg-[#121215]/60 border border-white/[0.04] backdrop-blur-2xl p-8 md:p-10 rounded-3xl shadow-2xl space-y-8">
           <div className="text-center space-y-3">
-            <div className="w-16 h-16 bg-white/[0.04] border border-white/10 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-inner"><ShieldCheck className="text-indigo-400/80" size={32} /></div>
-            <h1 className="text-2xl md:text-3xl font-black tracking-tight drop-shadow-sm">VAULT<span className="text-indigo-500 drop-shadow-md">ID</span></h1>
-            <p className="text-[11px] text-white/40 uppercase tracking-[0.3em] font-medium">Encrypted Communication</p>
+            <div className="w-20 h-20 bg-white/[0.04] border border-white/10 rounded-3xl flex items-center justify-center mx-auto mb-4 shadow-inner overflow-hidden flex-shrink-0">
+              <img src="/logo.png" alt="Cipher Logo" className="w-full h-full object-cover" />
+            </div>
+            <h1 className="text-3xl md:text-4xl font-black tracking-tighter drop-shadow-sm uppercase">CIPHER</h1>
+            <p className="text-[11px] text-white/40 uppercase tracking-[0.4em] font-medium">Encrypted. Minimalist. Private.</p>
           </div>
           <form onSubmit={handleAuth} className="space-y-4">
             <div className="relative group">
@@ -1023,7 +995,7 @@ const App = () => {
             </div>
             <div className="bg-white/[0.03] rounded-lg p-4 space-y-2">
               <div className="flex items-center justify-between">
-                <p className="text-sm font-medium text-white/70">VaultID Secure</p>
+                <p className="text-sm font-medium text-white/70">Cipher Secure</p>
                 <span className="text-[10px] font-bold text-green-500 bg-green-500/10 px-2 py-0.5 rounded">Live</span>
               </div>
               <p className="text-[11px] text-white/25">E2EE Protocol • Zero-Log Architecture</p>

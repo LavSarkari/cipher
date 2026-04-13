@@ -109,3 +109,61 @@ export const useTypingIndicator = (chatId, me) => {
 
   return { typingUsers: Array.from(typingUsers), sendTypingEvent };
 };
+
+/**
+ * Hook to listen for new messages in real-time
+ */
+export const useMessageListener = (chatOrGroupId, isGroup = false, onMessage) => {
+  useEffect(() => {
+    if (!chatOrGroupId) return;
+
+    const channel = supabase.channel(`msg_events:${chatOrGroupId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: isGroup ? 'group_messages' : 'messages',
+          filter: isGroup ? `group_id=eq.${chatOrGroupId}` : `chat_id=eq.${chatOrGroupId}`
+        },
+        (payload) => {
+          onMessage(payload);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [chatOrGroupId, isGroup, onMessage]);
+};
+
+/**
+ * Hook to listen for any changes on a table for the current user
+ */
+export const useTableListener = (table, filterField, filterValue, onChange) => {
+  useEffect(() => {
+    if (!filterValue) return;
+
+    const channel = supabase.channel(`table_events:${table}:${filterField}:${filterValue}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: table,
+          filter: `${filterField}=eq.${filterValue}`
+        },
+        () => {
+          onChange();
+        }
+      )
+      // Special case: for friendships and requests, we often need to listen to the other side too
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [table, filterField, filterValue, onChange]);
+};
+

@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { saveMessages, getCachedMessages } from './db';
 
 /**
  * Robust Supabase API layer.
@@ -185,14 +186,30 @@ export const api = {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return { messages: [] };
     const chatId = [user.id, peerId].sort().join(':');
+    
+    // 1. Get from local cache
+    const cached = await getCachedMessages(chatId, false);
+    const lastTimestamp = cached.length > 0 ? cached[cached.length - 1].created_at : '1970-01-01T00:00:00Z';
+
+    // 2. Fetch only new ones from Supabase
     const { data, error } = await supabase.from('messages')
       .select('*, u1:sender_id(username), u2:reply_to_id(ciphertext, iv, sender_id(username))')
-      .eq('chat_id', chatId).order('created_at', { ascending: true });
+      .eq('chat_id', chatId)
+      .gt('created_at', lastTimestamp)
+      .order('created_at', { ascending: true });
+    
     if (error) throw error;
-    return { messages: (data || []).map(m => ({ 
-      ...m, timestamp: m.created_at, senderId: m.sender_id, receiverId: m.receiver_id,
-      replyTo: m.u2 ? { ciphertext: m.u2.ciphertext, iv: m.u2.iv, senderUsername: m.u2.sender_id?.username } : null
-    }))};
+
+    if (data && data.length > 0) {
+      const fresh = data.map(m => ({ 
+        ...m, timestamp: m.created_at, senderId: m.sender_id, receiverId: m.receiver_id,
+        replyTo: m.u2 ? { ciphertext: m.u2.ciphertext, iv: m.u2.iv, senderUsername: m.u2.sender_id?.username } : null
+      }));
+      await saveMessages(fresh);
+      return { messages: [...cached, ...fresh] };
+    }
+
+    return { messages: cached };
   },
 
   sendMessage: async (peerId, payload, replyToId = null) => {
@@ -210,7 +227,9 @@ export const api = {
     };
     const { error } = await supabase.from('messages').insert(msg);
     if (error) throw error;
-    return { message: { ...msg, timestamp: new Date().toISOString(), senderId: msg.sender_id, receiverId: msg.receiver_id, reactions: {} } };
+    const finalMsg = { ...msg, created_at: new Date().toISOString(), timestamp: new Date().toISOString(), senderId: msg.sender_id, receiverId: msg.receiver_id, reactions: {} };
+    await saveMessages([finalMsg]);
+    return { message: finalMsg };
   },
 
   editMessage: async (msgId, payload) => {
@@ -231,14 +250,29 @@ export const api = {
   },
 
   groupMessages: async (groupId) => {
+    // 1. Get from local cache
+    const cached = await getCachedMessages(groupId, true);
+    const lastTimestamp = cached.length > 0 ? cached[cached.length - 1].created_at : '1970-01-01T00:00:00Z';
+
+    // 2. Fetch new ones
     const { data, error } = await supabase.from('group_messages')
       .select('*, u:sender_id(username), u2:reply_to_id(ciphertext, iv, sender_id(username))')
-      .eq('group_id', groupId).order('created_at', { ascending: true });
+      .eq('group_id', groupId)
+      .gt('created_at', lastTimestamp)
+      .order('created_at', { ascending: true });
+    
     if (error) throw error;
-    return { messages: (data || []).map(m => ({ 
-      ...m, senderUsername: m.u?.username || 'Unknown', timestamp: m.created_at, senderId: m.sender_id,
-      replyTo: m.u2 ? { ciphertext: m.u2.ciphertext, iv: m.u2.iv, senderUsername: m.u2.sender_id?.username } : null
-    }))};
+
+    if (data && data.length > 0) {
+      const fresh = data.map(m => ({ 
+        ...m, senderUsername: m.u?.username || 'Unknown', timestamp: m.created_at, senderId: m.sender_id,
+        replyTo: m.u2 ? { ciphertext: m.u2.ciphertext, iv: m.u2.iv, senderUsername: m.u2.sender_id?.username } : null
+      }));
+      await saveMessages(fresh);
+      return { messages: [...cached, ...fresh] };
+    }
+
+    return { messages: cached };
   },
 
   sendGroupMessage: async (groupId, payload, replyToId = null) => {
@@ -254,7 +288,9 @@ export const api = {
     };
     const { error } = await supabase.from('group_messages').insert(msg);
     if (error) throw error;
-    return { message: { ...msg, timestamp: new Date().toISOString(), senderId: msg.sender_id, reactions: {} } };
+    const finalMsg = { ...msg, created_at: new Date().toISOString(), timestamp: new Date().toISOString(), senderId: msg.sender_id, reactions: {} };
+    await saveMessages([finalMsg]);
+    return { message: finalMsg };
   },
 
   editGroupMessage: async (msgId, payload) => {

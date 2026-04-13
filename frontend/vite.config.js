@@ -12,25 +12,15 @@ export default defineConfig({
       },
       includeAssets: ["favicon.ico", "apple-touch-icon.png", "mask-icon.svg"],
       manifest: {
-        name: "Vault Secure",
-        short_name: "Vault",
-        description: "Secure End-to-End Encrypted Messaging",
-        theme_color: "#020408",
-        background_color: "#020408",
+        name: "Cipher Secure",
+        short_name: "Cipher",
+        description: "Encrypted. Minimalist. Private.",
+        theme_color: "#0a0a0c",
+        background_color: "#0a0a0c",
         display: "standalone",
         icons: [
           {
-            src: "pwa-192x192.png",
-            sizes: "192x192",
-            type: "image/png"
-          },
-          {
-            src: "pwa-512x512.png",
-            sizes: "512x512",
-            type: "image/png"
-          },
-          {
-            src: "pwa-512x512.png",
+            src: "logo.png",
             sizes: "512x512",
             type: "image/png",
             purpose: "any maskable"
