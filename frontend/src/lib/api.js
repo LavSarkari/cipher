@@ -30,11 +30,23 @@ export const api = {
     const { data: { user }, error } = await supabase.auth.getUser();
     if (error || !user) throw new Error("Not authenticated");
     
-    const { data: profile } = await supabase
+    let { data: profile } = await supabase
       .from('users')
       .select('*')
       .eq('id', user.id)
       .maybeSingle();
+
+    if (!profile) {
+      // Self-healing: Create profile if missing (helps with database migrations)
+      const username = user.user_metadata?.username || user.email?.split('@')[0] || 'user_' + user.id.slice(0, 5);
+      const { data: newProfile, error: insError } = await supabase
+        .from('users')
+        .insert({ id: user.id, username })
+        .select()
+        .single();
+      
+      if (!insError) profile = newProfile;
+    }
 
     return { user: profile || { id: user.id, username: user.email?.split('@')[0] || 'unknown' } };
   },
@@ -107,8 +119,7 @@ export const api = {
     if (!user) throw new Error("Session expired");
     const { error } = await supabase.from('friend_requests').insert({
       from_user_id: user.id,
-      to_user_id: targetId,
-      created_at: Date.now()
+      to_user_id: targetId
     });
     if (error) throw error;
     return { ok: true };
@@ -125,10 +136,9 @@ export const api = {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
     await supabase.from('friend_requests').delete().eq('from_user_id', fromUserId).eq('to_user_id', user.id);
-    const now = Date.now();
     await supabase.from('friendships').insert([
-      { user_id: user.id, friend_id: fromUserId, created_at: now },
-      { user_id: fromUserId, friend_id: user.id, created_at: now }
+      { user_id: user.id, friend_id: fromUserId },
+      { user_id: fromUserId, friend_id: user.id }
     ]);
     return { ok: true };
   },
@@ -160,15 +170,13 @@ export const api = {
     const { error: gError } = await supabase.from('groups').insert({
       id: groupId,
       name,
-      creator_id: user.id,
-      created_at: Date.now()
+      creator_id: user.id
     });
     if (gError) throw gError;
 
     await supabase.from('group_members').insert({
       group_id: groupId,
-      user_id: user.id,
-      joined_at: Date.now()
+      user_id: user.id
     });
 
     return { ok: true };
@@ -193,8 +201,7 @@ export const api = {
       sender_id: user.id,
       receiver_id: peerId,
       ciphertext: payload.ciphertext,
-      iv: payload.iv,
-      created_at: Date.now()
+      iv: payload.iv
     };
     const { error } = await supabase.from('messages').insert(msg);
     if (error) throw error;
@@ -215,8 +222,7 @@ export const api = {
       group_id: groupId,
       sender_id: user.id,
       ciphertext: payload.ciphertext,
-      iv: payload.iv,
-      created_at: Date.now()
+      iv: payload.iv
     };
     const { error } = await supabase.from('group_messages').insert(msg);
     if (error) throw error;

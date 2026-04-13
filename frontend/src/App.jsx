@@ -227,7 +227,8 @@ const ChatContainer = ({ activeChat, me, onBack, onRemoveFriend }) => {
         setRawMessages((prev) => [...prev, res.message]);
         setInput("");
         inputRef.current?.focus();
-      } catch {
+      } catch (err) {
+        alert("Failed to transmit: " + (err.message || "Unknown error"));
       } finally {
         setIsSending(false);
       }
@@ -752,7 +753,9 @@ const App = () => {
     try {
       await api.sendFriendRequest(targetId);
       await loadNetwork(searchQuery);
-    } catch {}
+    } catch (err) {
+      alert("Failed to send request: " + (err.message || "Check permissions"));
+    }
   };
 
   const acceptFriendReq = async (fromUserId) => {
@@ -761,7 +764,9 @@ const App = () => {
       setIncomingRequests((prev) => prev.filter((r) => r.fromUserId !== fromUserId));
       setOutgoingRequests((prev) => prev.filter((r) => r.toUserId !== fromUserId));
       await loadNetwork(searchQuery);
-    } catch {}
+    } catch (err) {
+      alert("Failed to accept: " + (err.message || "Database error"));
+    }
   };
 
   const rejectFriendReq = async (fromUserId) => {
