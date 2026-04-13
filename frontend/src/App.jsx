@@ -143,7 +143,7 @@ const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextM
           <p className="text-[15px] text-white/[0.75] leading-[1.625] mt-0.5">
             {isUnlocked && msg.plaintext ? msg.plaintext : (
               <span className="font-mono text-[12.5px] text-white/20 break-all select-none opacity-60 tracking-tighter leading-relaxed italic">
-                {isUnlocked ? "⚠️ Decryption Failed (Wrong Key?)" : getGarbage(msg.ciphertext)}
+                {getGarbage(msg.ciphertext)}
               </span>
             )}
             {msg.edited_at && <span className="text-[10px] text-white/30 ml-2">(edited)</span>}
