@@ -5,6 +5,7 @@ const toB64 = (bytes) => btoa(String.fromCharCode(...bytes));
 const fromB64 = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 
 const deriveKey = async (passphrase, chatId) => {
+  console.log("[Crypto] Deriving key for chatId:", chatId);
   const material = await crypto.subtle.importKey("raw", enc.encode(passphrase), "PBKDF2", false, [
     "deriveKey"
   ]);
@@ -23,6 +24,7 @@ const deriveKey = async (passphrase, chatId) => {
 };
 
 export const encryptMessage = async ({ plaintext, passphrase, chatId }) => {
+  console.log("[Crypto] Starting encryption...");
   const key = await deriveKey(passphrase, chatId);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt(
@@ -30,6 +32,7 @@ export const encryptMessage = async ({ plaintext, passphrase, chatId }) => {
     key,
     enc.encode(plaintext)
   );
+  console.log("[Crypto] Encryption complete.");
 
   return {
     ciphertext: toB64(new Uint8Array(ciphertext)),

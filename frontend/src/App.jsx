@@ -303,10 +303,15 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
         return;
       }
 
+      console.log("[Chat] Sending message...", { chatId, peerId: activeChat.id });
       const res = await api.sendMessage(activeChat.id, payload, replyTo?.id);
+      console.log("[Chat] Message sent successfully:", res.message.id);
       setRawMessages(prev => [...prev, res.message]);
       setInput(""); setReplyTo(null); inputRef.current?.focus();
-    } catch (err) { alert("Failed: " + (err.message || "Unknown error")); }
+    } catch (err) { 
+      console.error("[Chat] Send failed:", err);
+      alert("Failed: " + (err.message || "Unknown error")); 
+    }
     finally { setIsSending(false); }
   };
 
@@ -556,10 +561,15 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
       }
 
       const payload = await encryptMessage({ plaintext: input.trim(), passphrase: chatKey, chatId });
+      console.log("[Group] Sending message...", { groupId: activeGroup.id });
       const res = await api.sendGroupMessage(activeGroup.id, payload, replyTo?.id);
+      console.log("[Group] Message sent successfully:", res.message.id);
       setRawMessages(prev => [...prev, { ...res.message, senderUsername: me.username }]);
       setInput(""); setReplyTo(null); inputRef.current?.focus();
-    } catch {} finally { setIsSending(false); }
+    } catch (err) {
+      console.error("[Group] Send failed:", err);
+      alert("Group send failed: " + (err.message || "Check friendship or membership"));
+    } finally { setIsSending(false); }
   };
 
   const handleReact = async (msg, emoji) => {
