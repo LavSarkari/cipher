@@ -1091,10 +1091,18 @@ const App = () => {
             <button onClick={() => { setShowCreateGroup(!showCreateGroup); setGroupNameInput(""); }} className="p-1 -mr-1 text-white/30 hover:text-white/80 transition-colors active:scale-95"><Plus size={16} /></button>
           </div>
           {showCreateGroup && (
-            <div className="flex gap-1.5 px-2 mb-2">
-              <input autoFocus className="flex-1 bg-white/[0.04] border border-white/[0.06] rounded-md px-2.5 py-1.5 text-sm outline-none text-white/80 placeholder:text-white/20 focus:border-indigo-500/50 focus:bg-white/[0.06] transition-all" placeholder="Group name..." value={groupNameInput} onChange={(e) => setGroupNameInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && createGroup()} autoComplete="off" />
-              <button onClick={createGroup} disabled={isCreatingGroup || groupNameInput.trim().length < 2} className="px-2.5 bg-indigo-600 rounded-md text-white hover:bg-indigo-500 disabled:opacity-40 transition-colors flex items-center justify-center min-w-[36px]">
-                {isCreatingGroup ? <Loader2 size={14} className="animate-spin" /> : <CheckIcon size={14} strokeWidth={3} />}
+            <div className="flex gap-2 px-2 mb-3">
+              <input autoFocus 
+                className="flex-1 bg-white/[0.04] border border-white/[0.06] rounded-lg px-3 py-2 text-[13px] outline-none text-white/80 placeholder:text-white/15 focus:border-indigo-500/40 focus:bg-white/[0.05] transition-all" 
+                placeholder="Group name..." 
+                value={groupNameInput} 
+                onChange={(e) => setGroupNameInput(e.target.value)} 
+                onKeyDown={(e) => e.key === "Enter" && createGroup()} 
+                autoComplete="off" />
+              <button onClick={createGroup} 
+                disabled={isCreatingGroup || groupNameInput.trim().length < 2} 
+                className="flex-shrink-0 w-9 h-9 bg-indigo-600 rounded-lg text-white hover:bg-indigo-500 disabled:opacity-30 transition-all flex items-center justify-center shadow-lg shadow-indigo-500/10 active:scale-90">
+                {isCreatingGroup ? <Loader2 size={16} className="animate-spin" /> : <CheckIcon size={16} strokeWidth={3} />}
               </button>
             </div>
           )}
