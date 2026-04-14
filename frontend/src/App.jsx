@@ -351,11 +351,6 @@ const MediaMessageContent = ({ msg, isUnlocked, chatKey, chatId, onLightbox, onE
       const metaToDecrypt = msg.media_meta;
       const urlToDecrypt = msg.media_url;
 
-      if (!metaToDecrypt?.ct && (typeof urlToDecrypt !== 'string' || !urlToDecrypt?.includes('{"ct"'))) {
-        // Nothing encrypted here, just use raw if it's already a string url
-        return;
-      }
-
       try {
         // media.js decryptMetadata handles both raw objects and stringified JSON
         const dMeta = await decryptMetadata(metaToDecrypt, chatKey, chatId);
@@ -371,10 +366,66 @@ const MediaMessageContent = ({ msg, isUnlocked, chatKey, chatId, onLightbox, onE
     decryptAll();
   }, [msg.media_meta, msg.media_url, isUnlocked, chatKey, chatId]);
 
-  const effectiveMediaUrl = meta._decryptedUrl || (typeof msg.media_url === 'string' ? msg.media_url : null);
+  // Robust effective URL: for images, we MUST wait for decryption to avoid 400s
+  const effectiveMediaUrl = (type === 'image') 
+    ? meta._decryptedUrl 
+    : (meta._decryptedUrl || (typeof msg.media_url === 'string' ? msg.media_url : null));
+
+  // Decrypt and display
+  const loadImage = async () => {
+    if (imageUrl || loading || !isUnlocked || !chatKey || type !== 'image') return;
+    if (!effectiveMediaUrl) return; 
+    
+    // Safety: if it still looks like ciphertext (JSON) or is a direct URL, don't try to download from storage
+    if (effectiveMediaUrl.startsWith('{') || effectiveMediaUrl.startsWith('http')) {
+      if (effectiveMediaUrl.startsWith('http')) {
+        // Likely already a direct URL somehow (legacy or miscategorized), handle gracefully
+        setImageUrl(effectiveMediaUrl);
+      }
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const blob = await api.downloadMedia(effectiveMediaUrl);
+      const buffer = await blob.arrayBuffer();
+      const decrypted = await decryptFile(buffer, chatKey, chatId);
+      const url = URL.createObjectURL(new Blob([decrypted], { type: meta.mimeType || 'image/jpeg' }));
+      setImageUrl(url);
+    } catch (e) {
+      console.error('[Media] Decrypt failed:', e);
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Auto-load images when unlocked and path is ready
+  useEffect(() => { 
+    if (type === 'image') loadImage(); 
+  }, [isUnlocked, chatKey, effectiveMediaUrl, type]);
+  // Cleanup
+  useEffect(() => { return () => { if (imageUrl && !imageUrl.startsWith('http')) URL.revokeObjectURL(imageUrl); }; }, [imageUrl]);
+
+  // 3. Locked State: Show "garbage data" (ciphertext) instead of media placeholders
+  // MUST be after all hooks to avoid React Rule of Hooks errors
+  if (!isUnlocked || !chatKey) {
+    const getGarbage = (text) => {
+      if (!text) return "eW91X2FyZV9ub3RfbWVhbnRfdG9fcmVhZDF0aGlzCg==";
+      return text.substring(0, 60) + "...";
+    };
+    return (
+      <div className="py-1">
+        <span className="font-mono text-[12.5px] text-white/20 break-all select-none opacity-60 tracking-tighter leading-relaxed italic">
+          {getGarbage(msg.ciphertext || msg.id)}
+        </span>
+      </div>
+    );
+  }
 
   // Handle GIF messages
   if (type === 'gif') {
+    if (!effectiveMediaUrl) return null;
     return (
       <div className="rounded-xl overflow-hidden max-w-[320px] cursor-pointer hover:opacity-90 transition-opacity" onClick={() => onLightbox?.(effectiveMediaUrl)}>
         <img src={effectiveMediaUrl} alt="GIF" className="w-full rounded-xl" style={{ maxHeight: '280px', objectFit: 'cover' }} loading="lazy" />
@@ -428,30 +479,6 @@ const MediaMessageContent = ({ msg, isUnlocked, chatKey, chatId, onLightbox, onE
       );
     }
 
-    // Decrypt and display
-    const loadImage = async () => {
-      if (imageUrl || loading || !isUnlocked || !chatKey) return;
-      if (!effectiveMediaUrl) return; 
-      setLoading(true);
-      try {
-        const blob = await api.downloadMedia(effectiveMediaUrl);
-        const buffer = await blob.arrayBuffer();
-        const decrypted = await decryptFile(buffer, chatKey, chatId);
-        const url = URL.createObjectURL(new Blob([decrypted], { type: meta.mimeType || 'image/jpeg' }));
-        setImageUrl(url);
-      } catch (e) {
-        console.error('[Media] Decrypt failed:', e);
-        setError(true);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    // Auto-load when unlocked
-    useEffect(() => { loadImage(); }, [isUnlocked, chatKey]);
-    // Cleanup
-    useEffect(() => { return () => { if (imageUrl) URL.revokeObjectURL(imageUrl); }; }, [imageUrl]);
-
     return (
       <div className="rounded-xl overflow-hidden max-w-[320px] relative group cursor-pointer" onClick={() => imageUrl && onLightbox?.(imageUrl)}>
         {/* Blur-up thumbnail */}
@@ -491,6 +518,7 @@ const MediaMessageContent = ({ msg, isUnlocked, chatKey, chatId, onLightbox, onE
   }
 
   return null;
+
 };
 
 /* ─── Lightbox (Glassmorphism Full-Screen Viewer) ─── */

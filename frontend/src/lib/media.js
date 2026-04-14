@@ -192,12 +192,21 @@ export const decryptMetadata = async (encrypted, passphrase, chatId) => {
       { name: 'AES-GCM', iv },
       key,
       ct
-    );
+    ).catch(err => {
+      // If it's an OperationError, it's likely just not cipher-text or wrong key, avoid console spam
+      if (err.name === 'OperationError') return null;
+      throw err;
+    });
+    
+    if (!decrypted) return payload; // Fallback to raw payload
     
     return JSON.parse(new TextDecoder().decode(decrypted));
   } catch (e) {
-    console.error('[Media] Metadata decryption failed:', e);
-    return null;
+    // Only log if it's a real unexpected error
+    if (e.name !== 'SyntaxError') {
+      console.warn('[Media] Decryption skipped or failed:', e.message);
+    }
+    return payload; 
   }
 };
 
