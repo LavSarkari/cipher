@@ -119,21 +119,21 @@ const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextM
   const replyBanner = msg.replyTo && (
     <div 
       onClick={(e) => { e.stopPropagation(); document.getElementById(`msg-${msg.reply_to_id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}
-      className="flex items-center gap-1.5 text-[12px] text-white/35 mb-2 ml-[52px] md:ml-[56px] mr-4 relative group/reply cursor-pointer hover:text-white/50 transition-colors"
+      className="flex items-center gap-1.5 text-[12px] text-white/30 mb-2.5 ml-[56px] md:ml-[58px] mr-4 relative group/reply cursor-pointer hover:text-white/50 transition-colors"
     >
-      <div className="absolute -left-8 md:-left-9 top-[10px] w-6 md:w-8 h-4 border-l-2 border-t-2 border-white/20 rounded-tl-[8px] pointer-events-none" />
-      <div className="w-4 h-4 rounded-full bg-white/10 flex items-center justify-center text-[8px] font-bold text-white/40 flex-shrink-0">
+      <div className="absolute -left-9 md:-left-10 top-[11px] w-7 md:w-9 h-[22px] border-l-2 border-t-2 border-white/[0.08] rounded-tl-[12px] pointer-events-none" />
+      <div className="w-4 h-4 rounded-full bg-white/[0.07] flex items-center justify-center text-[8px] font-bold text-white/30 flex-shrink-0">
         {msg.replyTo.senderUsername?.[0]?.toUpperCase() || '?'}
       </div>
-      <span className="font-bold text-white/50 hover:underline">@{msg.replyTo.senderUsername}</span>
-      <span className="truncate italic max-w-[400px]">
+      <span className="font-bold text-white/40 hover:text-indigo-400 transition-colors">@{msg.replyTo.senderUsername}</span>
+      <span className="truncate italic max-w-[400px] opacity-80">
         {isUnlocked && msg.replyTo.plaintext ? msg.replyTo.plaintext : (msg.replyTo.plaintext === null ? "Decryption failed" : "Replied to an encrypted message")}
       </span>
     </div>
   );
 
   return (
-    <div id={`msg-${msg.id}`} className={`group/msg relative pt-0.5 hover:bg-white/[0.02] ${isFirst ? (msg.replyTo ? 'mt-1' : 'mt-[17px]') : ''}`} 
+    <div id={`msg-${msg.id}`} className={`group/msg relative pt-0.5 hover:bg-white/[0.02] ${isFirst ? (msg.replyTo ? 'mt-2' : 'mt-[17px]') : ''}`} 
          onContextMenu={(e) => onContextMenu(e, msg, { isOwn })} {...longPress} onTouchEnd={handleTap} onClick={handleTap}>
       {replyBanner}
       <div className="flex gap-4 px-4 py-0.5">
