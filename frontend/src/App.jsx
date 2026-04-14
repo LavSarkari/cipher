@@ -20,9 +20,10 @@ import {
 
 const AI_USER = { id: "ai-999", username: "Cipher AI", isAI: true };
 const NOTIFICATION_PREFS_KEY = "cipher_notification_prefs";
-const DEFAULT_NOTIFICATION_PREFS = { messages: true, friendRequests: true, groupRequests: true, sounds: true };
+const DEFAULT_NOTIFICATION_PREFS = { messages: true, friendRequests: true, groupMessages: true };
 const chatIdFor = (a, b) => [a, b].sort().join(":");
 const groupChatIdFor = (gid) => `group:${gid}`;
+const isMobileDevice = () => /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 /* ─── Cipher Mascot Avatar Variants ─── */
 const CipherMascot = ({ className = "w-full h-full p-3 text-white/50", id = 1 }) => {
@@ -81,23 +82,26 @@ const KeyModal = ({ title, onClose, onSubmit }) => {
 const useLongPress = (callback, ms = 600) => {
   const timer = useRef(null);
   const wasTriggered = useRef(false);
-  
+  const isMobile = useMemo(() => isMobileDevice(), []);
+
   const start = useCallback((e) => {
+    if (isMobile) return;
     wasTriggered.current = false;
     timer.current = setTimeout(() => {
       wasTriggered.current = true;
       callback(e);
     }, ms);
-  }, [callback, ms]);
+  }, [callback, ms, isMobile]);
 
   const stop = useCallback(() => {
+    if (isMobile) return false;
     clearTimeout(timer.current);
     const triggered = wasTriggered.current;
     wasTriggered.current = false;
     return triggered;
-  }, []);
+  }, [isMobile]);
 
-  return { onTouchStart: start, onTouchEnd: stop, onTouchMove: stop, wasTriggered: () => wasTriggered.current };
+  return { start, stop, onTouchStart: start, onTouchEnd: stop, onTouchMove: stop, wasTriggered: () => wasTriggered.current };
 };
 
 const MessageContextMenu = ({ x, y, msg, isOwn, onClose, onReply, onEdit, onReact, onDelete }) => {
@@ -589,7 +593,10 @@ const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextM
 
   return (
     <div id={`msg-${msg.id}`} className={`group/msg relative pt-0.5 hover:bg-white/[0.02] ${isFirst ? (msg.replyTo ? 'mt-2' : 'mt-[17px]') : ''}`} 
-         onContextMenu={(e) => { if (!e.touches) onContextMenu(e, msg, { isOwn }); }}
+         onContextMenu={(e) => { 
+           if (isMobileDevice()) e.preventDefault();
+           else if (!e.touches) onContextMenu(e, msg, { isOwn }); 
+         }}
          onTouchStart={longPress.onTouchStart}
          onTouchMove={longPress.onTouchMove}
          onTouchEnd={(e) => { if (!longPress.stop()) handleTap(e); }}
@@ -1134,8 +1141,8 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack, theme, onViewProfil
               <Plus size={20} />
             </button>
           )}
-          <input ref={inputRef} disabled={!isUnlocked || isSending} 
-            autoComplete="off" name="q_search"
+          <input ref={inputRef} disabled={!isUnlocked} type="text"
+            autoComplete="off" name="cipher_msg_input_field"
             data-lpignore="true" data-1p-ignore="true" data-form-type="other"
             spellCheck="false" autoCorrect="off" autoCapitalize="off"
             className="flex-1 bg-transparent py-3.5 text-[16px] md:text-[15px] outline-none text-white/80 placeholder:text-white/20 disabled:opacity-30"
@@ -1593,8 +1600,8 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup, theme, onViewPro
               <Plus size={20} />
             </button>
           )}
-          <input ref={inputRef} disabled={!isUnlocked || isSending} 
-            autoComplete="off" name="q_group_search"
+          <input ref={inputRef} disabled={!isUnlocked} type="text"
+            autoComplete="off" name="cipher_group_input_field"
             data-lpignore="true" data-1p-ignore="true" data-form-type="other"
             spellCheck="false" autoCorrect="off" autoCapitalize="off"
             className="flex-1 bg-transparent py-3 text-[15px] outline-none text-white/80 placeholder:text-white/20 disabled:opacity-30"
@@ -1678,6 +1685,10 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup, theme, onViewPro
 /* ─── Main App ─── */
 const App = () => {
   const [view, setView] = useState("auth");
+  const [notificationPrefs, setNotificationPrefs] = useState(() => {
+    const saved = localStorage.getItem(NOTIFICATION_PREFS_KEY);
+    return saved ? JSON.parse(saved) : DEFAULT_NOTIFICATION_PREFS;
+  });
   const [authMode, setAuthMode] = useState("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -1707,6 +1718,7 @@ const App = () => {
   const [pwdStatus, setPwdStatus] = useState(null);
   const [selectedUserForProfile, setSelectedUserForProfile] = useState(null);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [unreadCounts, setUnreadCounts] = useState({});
 
   // Tactical PWA Capture
   useEffect(() => {
@@ -1719,6 +1731,27 @@ const App = () => {
     return () => window.removeEventListener('beforeinstallprompt', handler);
   }, []);
 
+  // Hardware Back Button Navigation
+  useEffect(() => {
+    const isDeepView = !mobileSidebarOpen || isSettingsView || !!selectedUserForProfile;
+    if (isDeepView && isMobileDevice()) {
+      window.history.pushState({ internal: true }, '');
+    }
+  }, [mobileSidebarOpen, isSettingsView, selectedUserForProfile]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setMobileSidebarOpen(true);
+      setActiveChat(null);
+      setActiveGroup(null);
+      setIsSettingsView(false);
+      setSelectedUserForProfile(null);
+      setProfileForm(null);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
   const handleInstallPWA = async () => {
     if (!deferredPrompt) return;
     deferredPrompt.prompt();
@@ -1729,6 +1762,102 @@ const App = () => {
 
   // Centralized identity registry for real-time consistency
   const [profiles, setProfiles] = useState({});
+
+  const showBrowserNotification = useCallback((title, options = {}) => {
+    if (me?.status === 'dnd') return;
+    if (Notification.permission === 'granted') {
+      new Notification(title, {
+        icon: '/logo.png',
+        badge: '/logo.png',
+        ...options
+      });
+    }
+  }, [me?.status]);
+
+  const handleGlobalNotification = useCallback(async (type, payload) => {
+    // Prevent notifying for self
+    if (payload.sender_id === me?.id || payload.fromUserId === me?.id) return;
+
+    // Privacy-focused: Show only display name
+    let title = "Cipher";
+    let body = "New notification";
+    let prefKey = "messages";
+    let shouldNotify = false;
+
+    if (type === 'message') {
+      const sender = profiles[payload.sender_id] || { username: 'Someone' };
+      title = `${sender.display_name || sender.username}`;
+      body = "Message received";
+      prefKey = "messages";
+      // Notify if backgrounded OR if we are not in this DM
+      shouldNotify = notificationPrefs.messages && (document.visibilityState !== 'visible' || activeChat?.id !== payload.sender_id);
+      
+      // Increment unread count if we aren't looking at this chat
+      if (activeChat?.id !== payload.sender_id) {
+        setUnreadCounts(prev => ({ ...prev, [payload.sender_id]: (prev[payload.sender_id] || 0) + 1 }));
+      }
+    } else if (type === 'group_message') {
+      const group = myGroups.find(g => g.id === payload.group_id);
+      title = group ? `#${group.name}` : "Group Notification";
+      body = "New message received";
+      prefKey = "groupMessages";
+      // Notify if backgrounded OR if we are not in this Group
+      shouldNotify = notificationPrefs.groupMessages && (document.visibilityState !== 'visible' || activeGroup?.id !== payload.group_id);
+    } else if (type === 'friend_request') {
+      title = "Social Request";
+      body = `Incoming request from ${payload.username || 'a user'}`;
+      prefKey = "friendRequests";
+      shouldNotify = notificationPrefs.friendRequests;
+    }
+    
+    if (shouldNotify) {
+      showBrowserNotification(title, { body });
+    }
+  }, [me?.id, profiles, myGroups, activeChat?.id, activeGroup?.id, notificationPrefs, showBrowserNotification]);
+
+  // Automatically clear unread counts when entering a chat
+  useEffect(() => {
+    if (activeChat?.id) {
+      setUnreadCounts(prev => {
+        if (!prev[activeChat.id]) return prev;
+        const next = { ...prev };
+        delete next[activeChat.id];
+        return next;
+      });
+    }
+  }, [activeChat?.id]);
+
+  // Global Realtime Listeners for Notifications
+  useEffect(() => {
+    if (!me?.id) return;
+
+    const channel = supabase.channel('global_notifications')
+      .on('postgres_changes', { 
+        event: 'INSERT', 
+        schema: 'public', 
+        table: 'messages', 
+        filter: `receiver_id=eq.${me.id}` 
+      }, (p) => handleGlobalNotification('message', p.new))
+      .on('postgres_changes', { 
+        event: 'INSERT', 
+        schema: 'public', 
+        table: 'friend_requests', 
+        filter: `to_user_id=eq.${me.id}` 
+      }, (p) => handleGlobalNotification('friend_request', p.new))
+      // For groups, we listen to all group_messages and filter locally by our memberships
+      .on('postgres_changes', { 
+        event: 'INSERT', 
+        schema: 'public', 
+        table: 'group_messages' 
+      }, (p) => {
+        if (myGroups.some(g => g.id === p.new.group_id)) {
+          handleGlobalNotification('group_message', p.new);
+        }
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [me?.id, myGroups, handleGlobalNotification]);
 
   const updateProfiles = useCallback((newUsers) => {
     if (!newUsers || !Array.isArray(newUsers)) return;
@@ -1770,10 +1899,6 @@ const App = () => {
     profileForm.avatar_id !== (me.avatar_id||1) ||
     profileForm.banner_color !== (me.banner_color||"#4f46e5")
   );
-  const [notificationPrefs, setNotificationPrefs] = useState(() => {
-    const saved = localStorage.getItem(NOTIFICATION_PREFS_KEY);
-    return saved ? JSON.parse(saved) : DEFAULT_NOTIFICATION_PREFS;
-  });
   const [theme, setTheme] = useState(() => localStorage.getItem("cipher_theme") || "classical");
   const [activeSettingsTab, setActiveSettingsTab] = useState("profiles");
   const [settingsMobileView, setSettingsMobileView] = useState("nav");
@@ -1974,9 +2099,7 @@ const App = () => {
       <div className="w-full max-w-[400px] relative z-10">
         <div className="bg-[#121215]/60 border border-white/[0.04] backdrop-blur-2xl p-8 md:p-10 rounded-3xl shadow-2xl space-y-8">
           <div className="text-center space-y-3">
-            <div className="w-20 h-20 bg-white/[0.04] border border-white/10 rounded-3xl flex items-center justify-center mx-auto mb-4 shadow-inner overflow-hidden flex-shrink-0">
-              <img src="/logo.png" alt="Cipher Logo" className="w-full h-full object-cover" />
-            </div>
+            <img src="/logo.png" alt="Cipher Logo" className="w-24 h-24 mx-auto mb-2 object-contain drop-shadow-[0_0_20px_rgba(99,102,241,0.15)] flex-shrink-0" />
             <h1 className="text-3xl md:text-4xl font-black tracking-tighter drop-shadow-sm uppercase">CIPHER</h1>
             <p className="text-[11px] text-white/40 uppercase tracking-[0.4em] font-medium">Encrypted. Minimalist. Private.</p>
           </div>
@@ -2012,7 +2135,7 @@ const App = () => {
       <aside className={`${mobileSidebarOpen ? 'flex' : 'hidden'} md:flex flex-col w-full md:w-[272px] flex-shrink-0 mobile-view-transition safe-top border-r transition-colors duration-300 ${theme === 'vibrant' ? 'bg-[#16161a] border-white/[0.08]' : 'bg-[#0c0c0e] border-white/[0.06]'}`}>
         {/* Search & Friends Top Bar */}
         <div className="px-3 py-3 pb-2 flex items-center gap-2.5">
-          <img src="/logo.png" alt="Cipher" className="w-[18px] h-[18px] opacity-80" />
+          <img src="/logo.png" alt="Cipher" className="w-8 h-8 opacity-80 flex-shrink-0 object-contain" />
           <div className="flex-1 min-w-0 flex items-center gap-2 bg-white/[0.03] border border-white/[0.06] rounded-xl px-2.5 py-[6px] focus-within:bg-white/[0.05] focus-within:border-indigo-500/30 transition-all">
             <Search size={13} className="text-white/20 flex-shrink-0" />
             <input className="bg-transparent text-[11px] outline-none flex-1 text-white/70 placeholder:text-white/15 min-w-0" 
@@ -2411,7 +2534,81 @@ const App = () => {
                     </div>
                   )}
 
-                  {activeSettingsTab === 'notifications' && <div className="text-center py-20 text-white/10 uppercase font-bold tracking-[0.3em] text-xs">Notification Engine Online</div>}
+                  {activeSettingsTab === "notifications" && (
+                    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2">
+                      <section className="space-y-4">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/30 px-1">System Alerts</label>
+                        <div className="p-6 bg-[#111214] border border-white/5 rounded-2xl space-y-6">
+                          <div className="flex items-center justify-between group">
+                            <div className="space-y-1">
+                              <p className="text-sm font-semibold text-white/90 group-hover:text-indigo-400 transition-colors">Direct Messages</p>
+                              <p className="text-[11px] text-white/20">Display browser alerts for incoming encryptions</p>
+                            </div>
+                            <button onClick={() => setNotificationPrefs(p => ({...p, messages: !p.messages}))} 
+                              className={`w-10 h-5 rounded-full transition-all relative ${notificationPrefs.messages ? 'bg-indigo-600' : 'bg-white/10'}`}>
+                              <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${notificationPrefs.messages ? 'right-1' : 'left-1'}`} />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between group">
+                            <div className="space-y-1">
+                              <p className="text-sm font-semibold text-white/90 group-hover:text-indigo-400 transition-colors">Group Messages</p>
+                              <p className="text-[11px] text-white/20">Notify for activity within joined sectors</p>
+                            </div>
+                            <button onClick={() => setNotificationPrefs(p => ({...p, groupMessages: !p.groupMessages}))} 
+                              className={`w-10 h-5 rounded-full transition-all relative ${notificationPrefs.groupMessages ? 'bg-indigo-600' : 'bg-white/10'}`}>
+                              <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${notificationPrefs.groupMessages ? 'right-1' : 'left-1'}`} />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between group">
+                            <div className="space-y-1">
+                              <p className="text-sm font-semibold text-white/90 group-hover:text-indigo-400 transition-colors">Friend Requests</p>
+                              <p className="text-[11px] text-white/20">Notify for incoming uplink connection requests</p>
+                            </div>
+                            <button onClick={() => setNotificationPrefs(p => ({...p, friendRequests: !p.friendRequests}))} 
+                              className={`w-10 h-5 rounded-full transition-all relative ${notificationPrefs.friendRequests ? 'bg-indigo-600' : 'bg-white/10'}`}>
+                              <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${notificationPrefs.friendRequests ? 'right-1' : 'left-1'}`} />
+                            </button>
+                          </div>
+                        </div>
+                      </section>
+
+                      <section className="space-y-4">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/30 px-1">Browser Integration</label>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <button 
+                            onClick={async () => {
+                              const permission = await Notification.requestPermission();
+                              if (permission === 'granted') {
+                                showBrowserNotification("Cipher", { body: "Tactical alerts enabled." });
+                              }
+                            }}
+                            className="p-4 bg-indigo-600/10 border border-indigo-600/20 rounded-2xl hover:bg-indigo-600/20 transition-all text-left space-y-2 group"
+                          >
+                            <Bell className="text-indigo-400 group-hover:scale-110 transition-transform" size={18} />
+                            <p className="text-sm font-bold text-white">Enable Browser Alert</p>
+                            <p className="text-[10px] text-white/40">Request native OS notification permissions</p>
+                          </button>
+                          
+                          <button 
+                            onClick={() => {
+                              if (Notification.permission === 'granted') {
+                                showBrowserNotification("Cipher Test", { body: "Visual feedback system operational." });
+                              } else {
+                                alert("Please enable browser alerts first.");
+                              }
+                            }}
+                            className="p-4 bg-white/[0.02] border border-white/5 rounded-2xl hover:bg-white/[0.04] transition-all text-left space-y-2 group"
+                          >
+                            <Eye className="text-white/30 group-hover:text-white/60 transition-colors" size={18} />
+                            <p className="text-sm font-bold text-white">Test Alert</p>
+                            <p className="text-[10px] text-white/40">Verify visual feedback loops are functional</p>
+                          </button>
+                        </div>
+                      </section>
+                    </div>
+                  )}
                 </div>
 
                 {/* Desktop Close Button (Floating in content) */}
@@ -2513,9 +2710,16 @@ const App = () => {
                           <span className="text-[10px] text-white/20">@{f.username}</span>
                         </div>
                       </div>
-                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => { setActiveChat(f); setMobileSidebarOpen(false); }} className="p-2 rounded-full bg-white/[0.06] text-white/40 hover:text-white transition-colors"><MessageSquare size={16} /></button>
-                        <button onClick={() => removeFriend(f.id)} className="p-2 rounded-full bg-white/[0.06] text-white/40 hover:text-red-400 transition-colors"><UserMinus size={16} /></button>
+                      <div className="flex items-center gap-3">
+                        {unreadCounts[f.id] > 0 && (
+                          <div className="w-5 h-5 bg-indigo-600 rounded-full flex items-center justify-center text-[10px] font-bold text-white animate-pulse">
+                            {unreadCounts[f.id]}
+                          </div>
+                        )}
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => { setActiveChat(f); setMobileSidebarOpen(false); }} className="p-2 rounded-full bg-white/[0.06] text-white/40 hover:text-white transition-colors"><MessageSquare size={16} /></button>
+                          <button onClick={() => removeFriend(f.id)} className="p-2 rounded-full bg-white/[0.06] text-white/40 hover:text-red-400 transition-colors"><UserMinus size={16} /></button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -2707,7 +2911,10 @@ const App = () => {
         .discord-scrollbar::-webkit-scrollbar-thumb:hover { background: ${theme === 'vibrant' ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)'}; }
 
         /* Mobile PWA optimizations */
-        * { -webkit-tap-highlight-color: transparent; }
+        * { 
+          -webkit-tap-highlight-color: transparent; 
+          -webkit-touch-callout: none;
+        }
         html, body { 
           height: 100%; 
           margin: 0; 
