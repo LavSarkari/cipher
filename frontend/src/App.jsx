@@ -116,16 +116,24 @@ const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextM
     return text.substring(0, 60) + "...";
   };
 
-  const replyBanner = isFirst && msg.replyTo && (
-    <div className="flex items-center gap-1 text-[11px] text-white/40 mb-1 ml-13 mr-4 truncate relative">
-      <div className="absolute -left-7 top-1/2 w-6 h-4 border-l-2 border-t-2 border-white/20 rounded-tl-lg" />
-      <span className="font-semibold text-white/60">@{msg.replyTo.senderUsername}</span>
-      <span className="truncate">Encrypted referenced message</span>
+  const replyBanner = msg.replyTo && (
+    <div 
+      onClick={(e) => { e.stopPropagation(); document.getElementById(`msg-${msg.reply_to_id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}
+      className="flex items-center gap-1.5 text-[12px] text-white/35 mb-1.5 ml-[52px] md:ml-[56px] mr-4 truncate relative group/reply cursor-pointer hover:text-white/50 transition-colors"
+    >
+      <div className="absolute -left-7 top-[10px] w-6 h-4 border-l-2 border-t-2 border-white/10 rounded-tl-lg" />
+      <div className="w-4 h-4 rounded-full bg-white/5 flex items-center justify-center text-[8px] font-bold text-white/40 flex-shrink-0">
+        {msg.replyTo.senderUsername?.[0]?.toUpperCase() || '?'}
+      </div>
+      <span className="font-bold text-white/50 hover:underline">@{msg.replyTo.senderUsername}</span>
+      <span className="truncate italic">
+        {isUnlocked && msg.replyTo.plaintext ? msg.replyTo.plaintext : "Replied to an encrypted message"}
+      </span>
     </div>
   );
 
   return (
-    <div className={`group/msg relative pt-0.5 hover:bg-white/[0.02] ${isFirst ? 'mt-[17px]' : ''}`} 
+    <div id={`msg-${msg.id}`} className={`group/msg relative pt-0.5 hover:bg-white/[0.02] ${isFirst ? (msg.replyTo ? 'mt-1' : 'mt-[17px]') : ''}`} 
          onContextMenu={(e) => onContextMenu(e, msg, { isOwn })} {...longPress} onTouchEnd={handleTap} onClick={handleTap}>
       {replyBanner}
       <div className="flex gap-4 px-4 py-0.5">
@@ -265,17 +273,32 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
   useEffect(() => {
     (async () => {
       if (!isUnlocked || !chatKey) { setMessages(rawMessages.map(m => ({ ...m, plaintext: null }))); return; }
-      // Only decrypt messages we haven't seen before
       const resolved = await Promise.all(rawMessages.map(async (m) => {
-        const cached = decryptCache.current.get(m.id);
-        if (cached !== undefined) return { ...m, plaintext: cached };
-        try {
-          const pt = await decryptMessage({ ciphertext: m.ciphertext, iv: m.iv, passphrase: chatKey, chatId });
-          decryptCache.current.set(m.id, pt);
-          return { ...m, plaintext: pt };
-        } catch {
-          return { ...m, plaintext: null };
+        let pt = decryptCache.current.get(m.id);
+        if (pt === undefined) {
+          try {
+            pt = await decryptMessage({ ciphertext: m.ciphertext, iv: m.iv, passphrase: chatKey, chatId });
+            decryptCache.current.set(m.id, pt);
+          } catch { pt = null; }
         }
+        
+        let rpt = null;
+        if (m.replyTo) {
+          const rKey = `reply-${m.id}`;
+          rpt = decryptCache.current.get(rKey);
+          if (rpt === undefined) {
+            try {
+              rpt = await decryptMessage({ ciphertext: m.replyTo.ciphertext, iv: m.replyTo.iv, passphrase: chatKey, chatId });
+              decryptCache.current.set(rKey, rpt);
+            } catch { rpt = null; }
+          }
+        }
+
+        return { 
+          ...m, 
+          plaintext: pt, 
+          replyTo: m.replyTo ? { ...m.replyTo, plaintext: rpt } : null 
+        };
       }));
       setMessages(resolved);
     })();
@@ -406,9 +429,9 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
           <div className="h-px bg-white/[0.06] mt-6" />
         </div>
         {msgGroups.map((g, gi) => (
-          <React.Fragment key={gi}>
+          <React.Fragment key={`group-${g.messages[0].id}`}>
             {g.newDay && <div className="flex items-center gap-4 px-4 my-4"><div className="flex-1 h-px bg-white/[0.06]" /><span className="text-[11px] font-semibold text-white/30">{formatDateSeparator(g.firstTime)}</span><div className="flex-1 h-px bg-white/[0.06]" /></div>}
-            <SharedMessageItem msg={g.messages[0]} isFirst={true} groupItem={g} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} />
+            <SharedMessageItem key={g.messages[0].id} msg={g.messages[0]} isFirst={true} groupItem={g} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} />
             {g.messages.slice(1).map(m => (
               <SharedMessageItem key={m.id} msg={m} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} />
             ))}
@@ -558,23 +581,33 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
 
   useEffect(() => {
     (async () => {
-      if (!isUnlocked || !chatKey) { 
-        setMessages(rawMessages.map(m => ({ ...m, plaintext: null }))); 
-        return; 
-      }
-      
-      console.log("[Chat] Processing decryption for", rawMessages.length, "messages");
+      if (!isUnlocked || !chatKey) { setMessages(rawMessages.map(m => ({ ...m, plaintext: null }))); return; }
       const resolved = await Promise.all(rawMessages.map(async (m) => {
-        const cached = decryptCache.current.get(m.id);
-        if (cached !== undefined) return { ...m, plaintext: cached };
-        try {
-          const pt = await decryptMessage({ ciphertext: m.ciphertext, iv: m.iv, passphrase: chatKey, chatId });
-          decryptCache.current.set(m.id, pt);
-          return { ...m, plaintext: pt };
-        } catch (err) {
-          console.warn("[Chat] Decryption failed for message", m.id, err);
-          return { ...m, plaintext: null };
+        let pt = decryptCache.current.get(m.id);
+        if (pt === undefined) {
+          try {
+            pt = await decryptMessage({ ciphertext: m.ciphertext, iv: m.iv, passphrase: chatKey, chatId });
+            decryptCache.current.set(m.id, pt);
+          } catch { pt = null; }
         }
+
+        let rpt = null;
+        if (m.replyTo) {
+          const rKey = `reply-${m.id}`;
+          rpt = decryptCache.current.get(rKey);
+          if (rpt === undefined) {
+            try {
+              rpt = await decryptMessage({ ciphertext: m.replyTo.ciphertext, iv: m.replyTo.iv, passphrase: chatKey, chatId });
+              decryptCache.current.set(rKey, rpt);
+            } catch { rpt = null; }
+          }
+        }
+
+        return { 
+          ...m, 
+          plaintext: pt, 
+          replyTo: m.replyTo ? { ...m.replyTo, plaintext: rpt } : null 
+        };
       }));
       setMessages(resolved);
     })();
@@ -684,9 +717,9 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
           <div className="h-px bg-white/[0.06] mt-6" />
         </div>
         {msgGroups.map((g, gi) => (
-          <React.Fragment key={gi}>
+          <React.Fragment key={`group-${g.messages[0].id}`}>
             {g.newDay && <div className="flex items-center gap-4 px-4 my-4"><div className="flex-1 h-px bg-white/[0.06]" /><span className="text-[11px] font-semibold text-white/30">{formatDateSeparator(g.firstTime)}</span><div className="flex-1 h-px bg-white/[0.06]" /></div>}
-            <SharedMessageItem msg={g.messages[0]} isFirst={true} groupItem={g} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} />
+            <SharedMessageItem key={g.messages[0].id} msg={g.messages[0]} isFirst={true} groupItem={g} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} />
             {g.messages.slice(1).map(m => (
               <SharedMessageItem key={m.id} msg={m} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} />
             ))}

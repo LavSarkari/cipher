@@ -206,7 +206,9 @@ export const api = {
         replyTo: m.u2 ? { ciphertext: m.u2.ciphertext, iv: m.u2.iv, senderUsername: m.u2.sender_id?.username } : null
       }));
       await saveMessages(fresh);
-      return { messages: [...cached, ...fresh] };
+      const all = [...cached, ...fresh];
+      const unique = Array.from(new Map(all.map(m => [m.id, m])).values());
+      return { messages: unique };
     }
 
     return { messages: cached };
@@ -269,7 +271,9 @@ export const api = {
         replyTo: m.u2 ? { ciphertext: m.u2.ciphertext, iv: m.u2.iv, senderUsername: m.u2.sender_id?.username } : null
       }));
       await saveMessages(fresh);
-      return { messages: [...cached, ...fresh] };
+      const all = [...cached, ...fresh];
+      const unique = Array.from(new Map(all.map(m => [m.id, m])).values());
+      return { messages: unique };
     }
 
     return { messages: cached };
