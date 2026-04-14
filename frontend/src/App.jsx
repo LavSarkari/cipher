@@ -189,6 +189,7 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
   const [isSending, setIsSending] = useState(false);
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
+  const isInitialScrollDone = useRef(false);
   const chatId = useMemo(() => (me?.id && activeChat?.id) ? chatIdFor(me.id, activeChat.id) : null, [me?.id, activeChat?.id]);
 
   useEffect(() => {
