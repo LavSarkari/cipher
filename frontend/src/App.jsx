@@ -1047,20 +1047,23 @@ const App = () => {
     <div onContextMenu={(e) => { if (e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") e.preventDefault(); }} className="h-[100dvh] bg-[#0a0a0c] text-white flex font-['Inter',system-ui,sans-serif] overflow-hidden">
       {/* ─── Sidebar ─── */}
       <aside className={`${mobileSidebarOpen ? 'flex' : 'hidden'} md:flex flex-col w-full md:w-[272px] bg-[#0c0c0e] border-r border-white/[0.06] flex-shrink-0 mobile-view-transition safe-top`}>
-        {/* Search */}
-        <div className="p-3 pb-2">
-          <div className="flex items-center gap-2 bg-white/[0.04] rounded-lg px-3 py-[9px]">
-            <Search size={16} className="text-white/20" />
-            <input className="bg-transparent text-[14px] outline-none flex-1 text-white/70 placeholder:text-white/15" placeholder="Find a conversation" value={sidebarFilter} onChange={(e) => setSidebarFilter(e.target.value)} autoComplete="off" />
+        {/* Search & Friends Top Bar */}
+        <div className="px-3 py-3 pb-2 flex items-center gap-2.5">
+          <div className="flex-1 min-w-0 flex items-center gap-2 bg-white/[0.03] border border-white/[0.06] rounded-xl px-2.5 py-[6px] focus-within:bg-white/[0.05] focus-within:border-indigo-500/30 transition-all">
+            <Search size={13} className="text-white/20 flex-shrink-0" />
+            <input className="bg-transparent text-[11px] outline-none flex-1 text-white/70 placeholder:text-white/15 min-w-0" placeholder="Search..." value={sidebarFilter} onChange={(e) => setSidebarFilter(e.target.value)} autoComplete="off" />
           </div>
+          <button onClick={() => { setActiveChat(null); setActiveGroup(null); setMobileSidebarOpen(false); }}
+            title="Friends"
+            className={`relative flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg transition-all active:scale-90 ${isMainView ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'bg-white/[0.04] text-white/40 hover:text-white/70 hover:bg-white/[0.06]'}`}>
+            <GroupsIcon size={16} />
+            {incomingRequests.length > 0 && (
+              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[8px] font-black rounded-full w-3.5 h-3.5 flex items-center justify-center border-2 border-[#0c0c0e]">
+                {incomingRequests.length}
+              </span>
+            )}
+          </button>
         </div>
-
-        {/* Friends button */}
-        <button onClick={() => { setActiveChat(null); setActiveGroup(null); setMobileSidebarOpen(false); }}
-          className={`mx-2 mb-1 flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors active:scale-[0.98] ${isMainView ? 'bg-white/[0.06] text-white' : 'text-white/40 hover:text-white/70 active:bg-white/[0.04]'}`}>
-          <GroupsIcon size={20} /> Friends
-          {incomingRequests.length > 0 && <span className="ml-auto bg-red-500 text-white text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center">{incomingRequests.length}</span>}
-        </button>
 
         <div className="h-px bg-white/[0.06] mx-3 my-1.5" />
 
