@@ -311,5 +311,29 @@ export const api = {
     const { error } = await supabase.from('group_messages').update({ reactions: reactionsJson }).eq('id', msgId);
     if (error) throw error;
     return { ok: true };
+  },
+
+  groupFriendOptions: async (groupId) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { friends: [] };
+    const { friends } = await api.friends();
+    const { data: members, error } = await supabase.from('group_members').select('user_id').eq('group_id', groupId);
+    if (error) throw error;
+    const memberIds = new Set(members.map(m => m.user_id));
+    return { friends: friends.filter(f => f.id !== 'ai-999' && !memberIds.has(f.id)) };
+  },
+
+  addFriendToGroup: async (groupId, userId) => {
+    const { error } = await supabase.from('group_members').insert({ group_id: groupId, user_id: userId });
+    if (error) throw error;
+    return { ok: true };
+  },
+
+  leaveGroup: async (groupId) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { error } = await supabase.from('group_members').delete().eq('group_id', groupId).eq('user_id', user.id);
+    if (error) throw error;
+    return { ok: true };
   }
 };
