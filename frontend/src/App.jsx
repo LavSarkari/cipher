@@ -98,6 +98,8 @@ const MessageContextMenu = ({ x, y, msg, isOwn, onClose, onReply, onEdit, onReac
 const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextMenu, onReply, onEdit, onReact }) => {
   const isOwn = msg.senderId === me.id;
   const longPress = useLongPress((e) => {
+    // Skip menu if they are long-pressing the actual message text (allow native select)
+    if (e.target.closest('.msg-text-area')) return;
     const touch = e.touches?.[0];
     if (touch) onContextMenu(e, msg, { isOwn, touchX: touch.clientX, touchY: touch.clientY });
   });
@@ -134,7 +136,11 @@ const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextM
 
   return (
     <div id={`msg-${msg.id}`} className={`group/msg relative pt-0.5 hover:bg-white/[0.02] ${isFirst ? (msg.replyTo ? 'mt-2' : 'mt-[17px]') : ''}`} 
-         onContextMenu={(e) => onContextMenu(e, msg, { isOwn })} {...longPress} onTouchEnd={handleTap} onClick={handleTap}>
+         onContextMenu={(e) => onContextMenu(e, msg, { isOwn })}
+         onTouchStart={longPress.onTouchStart}
+         onTouchMove={longPress.onTouchMove}
+         onTouchEnd={(e) => { longPress.onTouchEnd(e); handleTap(e); }}
+         onClick={handleTap}>
       {replyBanner}
       <div className="flex gap-4 px-4 py-0.5">
         {isFirst ? (
@@ -155,7 +161,7 @@ const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextM
             </div>
           )}
           
-          <p className="text-[15px] text-white/[0.75] leading-[1.625] mt-0.5">
+          <p className="msg-text-area text-[15px] text-white/[0.75] leading-[1.625] mt-0.5 select-text">
             {isUnlocked && msg.plaintext ? msg.plaintext : (
               <span className="font-mono text-[12.5px] text-white/20 break-all select-none opacity-60 tracking-tighter leading-relaxed italic">
                 {getGarbage(msg.ciphertext)}
