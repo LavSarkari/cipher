@@ -24,7 +24,7 @@ export default defineConfig({
         display: "standalone",
         icons: [
           {
-            src: "logo.png",
+            src: "app icon.png",
             sizes: "512x512",
             type: "image/png",
             purpose: "any maskable"

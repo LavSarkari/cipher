@@ -2281,12 +2281,11 @@ const App = () => {
             
             {/* Sidebar (Mobile: only shown if view is 'nav') */}
             <aside className={`${settingsMobileView === 'nav' ? 'flex' : 'hidden'} md:flex flex-col w-full md:w-64 bg-white/[0.02] border-l border-white/[0.05] flex-shrink-0`}>
-              <div className="p-6 pb-2 flex items-center justify-between md:block">
-                <div>
-                  <h3 className="text-[10px] font-black uppercase tracking-widest text-white/30">User Settings</h3>
-                  <p className="text-xl font-bold text-white mt-1 hidden md:block">Settings</p>
-                </div>
-                <button onClick={() => setIsSettingsView(false)} className="md:hidden p-2 text-white/40 hover:text-white"><X size={20} /></button>
+              <div className="p-4 md:p-6 pb-2 md:pb-2 flex items-center justify-between">
+                <h2 className="text-lg md:text-xl font-black text-white tracking-wider uppercase">Settings</h2>
+                <button onClick={() => setIsSettingsView(false)} className="md:hidden p-2 text-white/40 hover:text-white hover:bg-white/10 bg-white/5 rounded-full active:scale-95 transition-all">
+                  <X size={18} />
+                </button>
               </div>
 
               <div className="flex-1 overflow-y-auto px-3 py-4 space-y-1 discord-scrollbar">
