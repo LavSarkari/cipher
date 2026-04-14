@@ -555,11 +555,13 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
   const isInitialScrollDone = useRef(false);
+  const userCache = useRef(new Map());
   const chatId = useMemo(() => groupChatIdFor(activeGroup.id), [activeGroup.id]);
 
   useEffect(() => {
     setRawMessages([]); setMessages([]); setIsUnlocked(false); setChatKey(""); setInput(""); 
     decryptCache.current.clear(); 
+    userCache.current.clear();
     isInitialScrollDone.current = false;
   }, [activeGroup.id]);
 
@@ -568,7 +570,16 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
     const load = async () => {
       try {
         const res = await api.groupMessages(activeGroup.id);
-        if (!stopped) setRawMessages(res.messages || []);
+        if (!stopped) {
+          // Prime user cache from history
+          const msgs = res.messages || [];
+          msgs.forEach(m => {
+            if (m.senderUsername && m.senderUsername !== 'Member' && m.senderUsername !== 'Unknown') {
+              userCache.current.set(m.senderId || m.sender_id, m.senderUsername);
+            }
+          });
+          setRawMessages(msgs);
+        }
       } catch { if (!stopped) setRawMessages([]); }
     };
     load();
@@ -581,13 +592,22 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
         console.log("[Group] Deduplicated message arrival:", m.id);
         return prev;
       }
+      const senderId = m.senderId || m.sender_id;
+      const cachedUsername = userCache.current.get(senderId);
+      const isMe = senderId === me.id;
+
       const formatted = { 
         ...m, 
         timestamp: m.timestamp || m.created_at, 
-        senderId: m.senderId || m.sender_id, 
+        senderId, 
         reactions: m.reactions || {},
-        senderUsername: m.senderUsername || m.u?.username || 'Member'
+        senderUsername: m.senderUsername || m.u?.username || (isMe ? me.username : cachedUsername) || 'Member'
       };
+
+      // Update cache if we found a valid name
+      if (formatted.senderUsername !== 'Member') {
+        userCache.current.set(senderId, formatted.senderUsername);
+      }
 
       if (formatted.reply_to_id && !formatted.replyTo) {
         const original = prev.find(x => x.id === formatted.reply_to_id);
@@ -763,7 +783,13 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
 
   const addFriend = async (fid) => {
     setAddingId(fid);
-    try { await api.addFriendToGroup(activeGroup.id, fid); setAddableFriends(prev => prev.filter(f => f.id !== fid)); } catch {} finally { setAddingId(""); }
+    try { 
+      await api.addFriendToGroup(activeGroup.id, fid); 
+      setAddableFriends(prev => prev.filter(f => f.id !== fid)); 
+    } catch (err) {
+      console.error("[Group] Invitation failed:", err);
+      alert("Invite failed: " + (err.message || "Permissions issue"));
+    } finally { setAddingId(null); }
   };
 
   const msgGroups = groupMessages(messages);

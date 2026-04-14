@@ -32,8 +32,10 @@
 - **👥 Dynamic Groups**: Create, join, and manage private groups with shared encryption contexts.
 - **🤖 Gemini AI Integration**: A secure AI relay for assistant-based queries within the app.
 - **🌑 Stealth Mode UI**: A premium, high-contrast dark theme optimized for focused communication.
-- **📱 PWA Ready**: Install Cipher directly to your home screen for a native, zero-friction experience.
-- **⌨️ Discord-Style Interaction**: Familiar commands, typing indicators, and message grouping logic.
+- **📱 PWA & Mobile UX**: High-performance interaction hooks (`useLongPress`), native selection protection, and resilient touch handling for a native-app feel.
+- **👥 Advanced Group Management**: Secure group creation, friend-based invitations, and robust RLS (Row Level Security) membership logic.
+- **🛡️ Production Hardened**: Intelligent input focus management, anti-autofill masking, and real-time username resolution caches.
+- **⌨️ Discord-Style Interaction**: Familiar commands, typing indicators, message grouping (stitching), and smooth scroll pinning.
 
 ---
 
