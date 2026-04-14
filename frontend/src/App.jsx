@@ -3,7 +3,7 @@ import {
   AlertCircle, Bell, ChevronLeft, Fingerprint, Info, Key, Loader2,
   LogOut, MessageSquare, Plus, Search, Send, Settings as SettingsIcon,
   ShieldCheck, Sparkles, User as UserIcon, UserMinus, UserPlus,
-  Users as GroupsIcon, X, AtSign, Hash, Lock, Menu,
+  Users as GroupsIcon, X, AtSign, Hash, Lock, Menu, Check as CheckIcon,
   CornerUpLeft, Edit2, Smile, MoreHorizontal
 } from "lucide-react";
 import { api } from "./lib/api";
@@ -52,11 +52,26 @@ const KeyModal = ({ title, onClose, onSubmit }) => {
 };
 
 /* ─── Shared Components & Hooks ─── */
-const useLongPress = (callback, ms = 400) => {
+const useLongPress = (callback, ms = 600) => {
   const timer = useRef(null);
-  const start = (e) => { timer.current = setTimeout(() => { callback(e); }, ms); };
-  const stop = () => { clearTimeout(timer.current); };
-  return { onTouchStart: start, onTouchEnd: stop, onTouchMove: stop };
+  const wasTriggered = useRef(false);
+  
+  const start = useCallback((e) => {
+    wasTriggered.current = false;
+    timer.current = setTimeout(() => {
+      wasTriggered.current = true;
+      callback(e);
+    }, ms);
+  }, [callback, ms]);
+
+  const stop = useCallback(() => {
+    clearTimeout(timer.current);
+    const triggered = wasTriggered.current;
+    wasTriggered.current = false;
+    return triggered;
+  }, []);
+
+  return { onTouchStart: start, onTouchEnd: stop, onTouchMove: stop, wasTriggered: () => wasTriggered.current };
 };
 
 const MessageContextMenu = ({ x, y, msg, isOwn, onClose, onReply, onEdit, onReact }) => {
@@ -134,11 +149,11 @@ const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextM
 
   return (
     <div id={`msg-${msg.id}`} className={`group/msg relative pt-0.5 hover:bg-white/[0.02] ${isFirst ? (msg.replyTo ? 'mt-2' : 'mt-[17px]') : ''}`} 
-         onContextMenu={(e) => onContextMenu(e, msg, { isOwn })}
+         onContextMenu={(e) => { if (!e.touches) onContextMenu(e, msg, { isOwn }); }}
          onTouchStart={longPress.onTouchStart}
          onTouchMove={longPress.onTouchMove}
-         onTouchEnd={(e) => { longPress.onTouchEnd(e); handleTap(e); }}
-         onClick={handleTap}>
+         onTouchEnd={(e) => { if (!longPress.stop()) handleTap(e); }}
+         onClick={(e) => { if (!('ontouchstart' in window)) handleTap(e); }}>
       {replyBanner}
       <div className="flex gap-4 px-4 py-0.5">
         {isFirst ? (
@@ -367,7 +382,15 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
       console.log("[Chat] Message sent successfully:", res.message.id);
       addMessage(res.message);
       setInput(""); setReplyTo(null); 
-      setTimeout(() => inputRef.current?.focus(), 50);
+      setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          // Ensure cursor is at the end
+          const val = inputRef.current.value;
+          inputRef.current.value = '';
+          inputRef.current.value = val;
+        }
+      }, 100);
     } catch (err) { 
       console.error("[Chat] Send failed:", err);
       alert("Failed: " + (err.message || "Unknown error")); 
@@ -696,7 +719,14 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
       console.log("[Group] Message sent successfully:", res.message.id);
       addMessage({ ...res.message, senderUsername: me.username });
       setInput(""); setReplyTo(null); 
-      setTimeout(() => inputRef.current?.focus(), 50);
+      setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          const val = inputRef.current.value;
+          inputRef.current.value = '';
+          inputRef.current.value = val;
+        }
+      }, 100);
     } catch (err) {
       console.error("[Group] Send failed:", err);
       alert("Group send failed: " + (err.message || "Check friendship or membership"));
@@ -1038,7 +1068,7 @@ const App = () => {
             <div className="flex gap-1.5 px-2 mb-2">
               <input autoFocus className="flex-1 bg-white/[0.04] border border-white/[0.06] rounded-md px-2.5 py-1.5 text-sm outline-none text-white/80 placeholder:text-white/20 focus:border-indigo-500/50 focus:bg-white/[0.06] transition-all" placeholder="Group name..." value={groupNameInput} onChange={(e) => setGroupNameInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && createGroup()} autoComplete="off" />
               <button onClick={createGroup} disabled={isCreatingGroup || groupNameInput.trim().length < 2} className="px-2.5 bg-indigo-600 rounded-md text-white hover:bg-indigo-500 disabled:opacity-40 transition-colors flex items-center justify-center min-w-[36px]">
-                {isCreatingGroup ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} strokeWidth={3} />}
+                {isCreatingGroup ? <Loader2 size={14} className="animate-spin" /> : <CheckIcon size={14} strokeWidth={3} />}
               </button>
             </div>
           )}
