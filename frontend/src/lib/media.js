@@ -169,11 +169,24 @@ export const encryptMetadata = async (data, passphrase, chatId) => {
  * Decrypts metadata from its encrypted object form
  */
 export const decryptMetadata = async (encrypted, passphrase, chatId) => {
-  if (!encrypted || !encrypted.ct || !encrypted.iv) return encrypted; // Not encrypted or missing parts
+  if (!encrypted) return null;
+  
+  // Handle stringified JSON from TEXT columns
+  let payload = encrypted;
+  if (typeof encrypted === 'string') {
+    try {
+      payload = JSON.parse(encrypted);
+    } catch (e) {
+      return encrypted; // Probably a raw storage path string
+    }
+  }
+
+  if (!payload.ct || !payload.iv) return payload; 
+  
   try {
     const key = await deriveFileKey(passphrase, chatId);
-    const iv = Uint8Array.from(atob(encrypted.iv), c => c.charCodeAt(0));
-    const ct = Uint8Array.from(atob(encrypted.ct), c => c.charCodeAt(0));
+    const iv = Uint8Array.from(atob(payload.iv), c => c.charCodeAt(0));
+    const ct = Uint8Array.from(atob(payload.ct), c => c.charCodeAt(0));
     
     const decrypted = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv },

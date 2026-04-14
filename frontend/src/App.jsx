@@ -162,199 +162,170 @@ const MessageContextMenu = ({ x, y, msg, isOwn, onClose, onReply, onEdit, onReac
 
 /* ─── Media Picker (Tabbed: Upload / GIFs / Stickers) ─── */
 const MediaPicker = ({ onSelectFile, onSelectGif, onSelectSticker, onClose, ephemeral, onToggleEphemeral }) => {
-  const [tab, setTab] = useState('upload'); // 'upload' | 'gif' | 'sticker'
-  const [gifQuery, setGifQuery] = useState('');
-  const [stickerQuery, setStickerQuery] = useState('');
-  const [gifs, setGifs] = useState([]);
-  const [stickers, setStickers] = useState([]);
+  const [tab, setTab] = useState('gif'); // Default to gif for more "wow" factor
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef(null);
   const debounceRef = useRef(null);
 
-  // Load trending on mount
   useEffect(() => {
-    if (tab === 'gif') {
-      setLoading(true);
-      searchGifs('').then(setGifs).finally(() => setLoading(false));
-    } else if (tab === 'sticker') {
-      setLoading(true);
-      searchStickers('').then(setStickers).finally(() => setLoading(false));
-    }
+    if (tab === 'upload') return;
+    setLoading(true);
+    const search = tab === 'gif' ? searchGifs : searchStickers;
+    const fetchInitial = async () => {
+      const res = await search(query);
+      setResults(res);
+      setLoading(false);
+    };
+    fetchInitial();
   }, [tab]);
 
-  const handleGifSearch = (q) => {
-    setGifQuery(q);
+  const handleSearch = (q) => {
+    setQuery(q);
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
       setLoading(true);
-      const results = await searchGifs(q);
-      setGifs(results);
-      setLoading(false);
-    }, 400);
-  };
-
-  const handleStickerSearch = (q) => {
-    setStickerQuery(q);
-    clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(async () => {
-      setLoading(true);
-      const results = await searchStickers(q);
-      setStickers(results);
+      const search = tab === 'gif' ? searchGifs : searchStickers;
+      const res = await search(q);
+      setResults(res);
       setLoading(false);
     }, 400);
   };
 
   return (
-    <div className="absolute bottom-full left-0 right-0 mb-2 mx-2 bg-[#111214] border border-white/10 rounded-2xl shadow-2xl overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-2 duration-200" style={{ maxHeight: '380px' }}>
-      {/* Tab Bar */}
-      <div className="flex items-center justify-between border-b border-white/[0.06] px-3 py-2">
-        <div className="flex gap-1">
+    <div className="absolute bottom-full left-0 right-0 mb-3 mx-2 md:mx-4 bg-[#1e1f22]/98 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.6)] overflow-hidden z-[100] animate-in fade-in slide-in-from-bottom-2 duration-200" style={{ height: '350px' }}>
+      {/* Header / Tabs */}
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/5 bg-white/[0.01]">
+        <div className="flex p-0.5 bg-black/20 rounded-lg">
           {[
-            { id: 'upload', icon: ImageIcon, label: 'Upload' },
-            { id: 'gif', icon: Gift, label: 'GIF' },
+            { id: 'gif', icon: Gift, label: 'GIFs' },
             { id: 'sticker', icon: Smile, label: 'Stickers' },
+            { id: 'upload', icon: ImageIcon, label: 'Upload' }
           ].map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all ${tab === t.id ? 'bg-indigo-500/20 text-indigo-400' : 'text-white/30 hover:text-white/60 hover:bg-white/5'}`}>
-              <t.icon size={14} />
-              {t.label}
+            <button key={t.id} onClick={() => { setTab(t.id); setResults([]); setQuery(''); }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[9px] font-black uppercase tracking-widest transition-all ${tab === t.id ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/10' : 'text-white/20 hover:text-white/50 hover:bg-white/5'}`}>
+              <t.icon size={12} strokeWidth={2.5} />
+              <span className="hidden sm:inline">{t.label}</span>
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-2">
-          {tab === 'upload' && (
-            <button onClick={onToggleEphemeral} title="Burn After Reading"
-              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${ephemeral ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' : 'text-white/20 hover:text-white/40'}`}>
-              <Flame size={12} />
-              {ephemeral ? 'ON' : 'OFF'}
-            </button>
-          )}
-          <button onClick={onClose} className="p-1.5 text-white/20 hover:text-white/60 rounded-lg hover:bg-white/5 transition-colors"><X size={16} /></button>
-        </div>
+        <button onClick={onClose} className="p-1.5 text-white/10 hover:text-white/40 hover:bg-white/5 rounded-lg transition-all">
+          <X size={16} />
+        </button>
       </div>
 
-      {/* Upload Tab */}
-      {tab === 'upload' && (
-        <div className="p-6 flex flex-col items-center justify-center min-h-[200px]">
-          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) { onSelectFile(file); onClose(); }
-            e.target.value = '';
-          }} />
-          <button onClick={() => fileInputRef.current?.click()}
-            className="w-full max-w-xs p-8 border-2 border-dashed border-white/10 rounded-2xl hover:border-indigo-500/40 hover:bg-indigo-500/5 transition-all group flex flex-col items-center gap-3 cursor-pointer">
-            <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 flex items-center justify-center group-hover:bg-indigo-500/20 transition-colors">
+      {/* Search Section */}
+      {tab !== 'upload' && (
+        <div className="px-3 py-2 bg-white/[0.01]">
+          <div className="relative group">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/10 group-focus-within:text-indigo-400 transition-colors" size={14} />
+            <input 
+              value={query} 
+              onChange={(e) => handleSearch(e.target.value)} 
+              placeholder={`Search ${tab === 'gif' ? 'GIPHY' : 'stickers'}...`}
+              className="w-full bg-black/20 border border-white/5 rounded-lg pl-8 pr-3 py-2 text-xs text-white/80 outline-none focus:border-indigo-500/20 focus:bg-black/30 transition-all placeholder:text-white/5"
+              autoFocus 
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Content Area */}
+      <div className="flex-1 overflow-y-auto discord-scrollbar px-2 pb-2 h-[calc(100%-80px)]">
+        {tab === 'upload' ? (
+          <div className="h-full flex flex-col items-center justify-center p-4 space-y-4">
+            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) { onSelectFile(file); onClose(); }
+              e.target.value = '';
+            }} />
+            <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 flex items-center justify-center border border-indigo-500/10">
               <ImageIcon size={24} className="text-indigo-400" />
             </div>
-            <div className="text-center">
-              <p className="text-sm font-bold text-white/60 group-hover:text-white/80 transition-colors">Click to Upload</p>
-              <p className="text-[10px] text-white/20 mt-1">JPEG, PNG, WebP • Max 10MB</p>
+            <div className="text-center space-y-1">
+              <h4 className="text-xs font-bold text-white/60">Share File</h4>
+              <p className="text-[10px] text-white/20 leading-tight">E2E Encrypted</p>
             </div>
-          </button>
-          {ephemeral && (
-            <div className="mt-4 flex items-center gap-2 text-orange-400/70 text-[11px]">
-              <Flame size={14} />
-              <span className="font-medium">View Once — Media will self-destruct after viewing</span>
+            <div className="flex flex-col gap-2 w-full max-w-[180px]">
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all">
+                Select
+              </button>
+              <button 
+                onClick={onToggleEphemeral}
+                className={`w-full py-2 rounded-lg text-[9px] font-bold uppercase tracking-widest border transition-all flex items-center justify-center gap-1.5 ${ephemeral ? 'bg-orange-500/10 border-orange-500/30 text-orange-400' : 'bg-transparent border-white/5 text-white/10 hover:border-white/10'}`}>
+                <Flame size={12} />
+                Wait: {ephemeral ? 'ON' : 'OFF'}
+              </button>
             </div>
-          )}
-        </div>
-      )}
-
-      {/* GIF Tab */}
-      {tab === 'gif' && (
-        <div className="flex flex-col" style={{ maxHeight: '320px' }}>
-          <div className="p-2 border-b border-white/5">
-            <input value={gifQuery} onChange={(e) => handleGifSearch(e.target.value)} placeholder="Search GIFs..."
-              className="w-full bg-white/[0.04] border border-white/[0.06] rounded-lg px-3 py-2 text-xs text-white/80 outline-none placeholder:text-white/20 focus:border-indigo-500/30 transition-colors" autoFocus />
           </div>
-          <div className="flex-1 overflow-y-auto p-2 discord-scrollbar">
+        ) : (
+          <>
             {loading ? (
-              <div className="flex items-center justify-center py-8"><Loader2 size={20} className="animate-spin text-white/20" /></div>
+              <div className="h-full flex flex-col items-center justify-center space-y-2 opacity-30">
+                <Loader2 size={18} className="animate-spin text-indigo-400" />
+                <span className="text-[9px] uppercase tracking-widest font-bold">Syncing</span>
+              </div>
             ) : (
-              <div className="grid grid-cols-4 gap-1.5">
-                {gifs.map(g => (
-                  <button key={g.id} onClick={() => { onSelectGif(g); onClose(); }}
-                    className="relative rounded-lg overflow-hidden hover:ring-2 hover:ring-indigo-500 transition-all group aspect-square bg-white/5">
-                    <img src={g.preview || g.url} alt={g.title} className="w-full h-full object-cover" loading="lazy" />
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
-                      <Gift size={18} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className="columns-3 xs:columns-4 gap-1.5 space-y-1.5">
+                {tab === 'sticker' && !query && (
+                  <div className="break-inside-avoid-column mb-1.5">
+                    <div className="py-1 flex items-center gap-1.5">
+                      <div className="h-px flex-1 bg-white/5"></div>
+                      <span className="text-[8px] font-black uppercase tracking-widest text-indigo-400/30 whitespace-nowrap">Premium</span>
+                      <div className="h-px flex-1 bg-white/5"></div>
                     </div>
-                  </button>
-                ))}
-              </div>
-            )}
-            {!loading && gifs.length === 0 && (
-              <div className="flex flex-col items-center justify-center py-8 text-center px-4">
-                <Gift size={24} className="text-white/10 mb-2" />
-                <p className="text-white/30 text-xs font-semibold">No GIFs found</p>
-                <p className="text-white/10 text-[10px] mt-1 max-w-[200px]">Check your connection or update your Giphy API key in media.js</p>
-              </div>
-            )}
-          </div>
-          <div className="px-3 py-1.5 border-t border-white/5 flex items-center justify-between">
-            <button onClick={() => searchGifs(gifQuery).then(setGifs)} className="text-[9px] text-indigo-400 hover:text-indigo-300 font-bold uppercase tracking-wider">Retry</button>
-            <span className="text-[9px] text-white/15 uppercase tracking-widest font-bold">Powered by GIPHY</span>
-          </div>
-        </div>
-      )}
-
-      {/* Sticker Tab */}
-      {tab === 'sticker' && (
-        <div className="flex flex-col" style={{ maxHeight: '320px' }}>
-          <div className="p-2 border-b border-white/5">
-            <input value={stickerQuery} onChange={(e) => handleStickerSearch(e.target.value)} placeholder="Search stickers..."
-              className="w-full bg-white/[0.04] border border-white/[0.06] rounded-lg px-3 py-2 text-xs text-white/80 outline-none placeholder:text-white/20 focus:border-indigo-500/30 transition-colors" autoFocus />
-          </div>
-          {/* Cipher Originals Row */}
-          <div className="px-3 pt-3 pb-2">
-            <p className="text-[9px] font-bold text-white/20 uppercase tracking-widest mb-2 px-1">Cipher Originals (3D)</p>
-            <div className="flex gap-2 overflow-x-auto pb-2 px-1 discord-scrollbar">
-              {CIPHER_STICKERS.map(s => (
-                <button key={s.id} onClick={() => { onSelectSticker(s); onClose(); }} title={s.name}
-                  className="flex-shrink-0 w-14 h-14 bg-white/[0.03] rounded-xl hover:bg-indigo-500/20 hover:scale-105 active:scale-95 transition-all flex items-center justify-center border border-white/5 hover:border-indigo-500/30 overflow-hidden p-2 group relative">
-                  {s.url ? (
-                    <img src={s.url} alt={s.name} className="w-full h-full object-contain drop-shadow-xl select-none pointer-events-none" 
-                      onError={(e) => { e.target.onerror = null; e.target.src = ""; e.target.parentElement.innerHTML = `<span class="text-2xl">${s.emoji}</span>`; }} />
-                  ) : (
-                    <span className="text-2xl">{s.emoji}</span>
-                  )}
-                  <div className="absolute inset-x-0 bottom-0 py-0.5 bg-indigo-500/90 opacity-0 group-hover:opacity-100 transition-opacity text-[7px] font-bold text-white text-center">
-                    {s.name}
+                    <div className="grid grid-cols-2 gap-1.5 mt-1.5">
+                      {CIPHER_STICKERS.map(s => (
+                        <button key={s.id} onClick={() => { onSelectSticker(s); onClose(); }}
+                          className="group relative aspect-square bg-white/[0.02] rounded-lg flex items-center justify-center hover:bg-white/[0.05] transition-all overflow-hidden border border-white/5 hover:border-indigo-500/20">
+                          <img src={s.url} alt={s.name} className="w-10 h-10 object-contain group-hover:scale-110 transition-transform duration-300" />
+                        </button>
+                      ))}
+                    </div>
+                    <div className="py-1 flex items-center gap-1.5 mt-1.5">
+                      <div className="h-px flex-1 bg-white/5"></div>
+                      <span className="text-[8px] font-black uppercase tracking-widest text-white/5 whitespace-nowrap">Global</span>
+                      <div className="h-px flex-1 bg-white/5"></div>
+                    </div>
                   </div>
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="h-px bg-white/5 mx-3" />
-          {/* Giphy Stickers */}
-          <div className="flex-1 overflow-y-auto p-2 discord-scrollbar">
-            {loading ? (
-              <div className="flex items-center justify-center py-8"><Loader2 size={20} className="animate-spin text-white/20" /></div>
-            ) : (
-              <div className="grid grid-cols-4 gap-2">
-                {stickers.map(s => (
-                  <button key={s.id} onClick={() => { onSelectSticker(s); onClose(); }}
-                    className="relative rounded-lg overflow-hidden hover:ring-2 hover:ring-indigo-500 transition-all group aspect-square bg-white/[0.03] p-1.5 flex items-center justify-center">
-                    <img src={s.preview || s.url} alt={s.title} className="max-w-full max-h-full object-contain select-none pointer-events-none" loading="lazy" />
-                  </button>
+                )}
+                {results.map(item => (
+                  <div key={item.id} className="break-inside-avoid-column mb-1.5">
+                    <button onClick={() => { tab === 'gif' ? onSelectGif(item) : onSelectSticker(item); onClose(); }}
+                      className="group relative w-full bg-white/[0.02] rounded-lg overflow-hidden hover:ring-1 hover:ring-indigo-500 transition-all border border-white/5 block">
+                      <img 
+                        src={item.preview || item.url} 
+                        alt={item.title} 
+                        className="w-full h-auto object-cover group-hover:scale-105 transition-transform duration-500" 
+                        loading="lazy" 
+                        style={{ minHeight: '60px' }}
+                      />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-indigo-900/30 transition-colors flex items-center justify-center">
+                        <Plus size={20} className="text-white opacity-0 group-hover:opacity-100 scale-75 transition-all" />
+                      </div>
+                    </button>
+                  </div>
                 ))}
+            </div>
+            )}
+            {!loading && results.length === 0 && query && (
+              <div className="h-full flex flex-col items-center justify-center p-4 opacity-10">
+                <Search size={24} />
               </div>
             )}
-            {!loading && stickers.length === 0 && (
-              <div className="flex flex-col items-center justify-center py-8 text-center px-4">
-                <p className="text-white/30 text-xs font-semibold">No stickers found</p>
-                <button onClick={() => searchStickers(stickerQuery).then(setStickers)} className="text-[9px] text-indigo-400 hover:text-indigo-300 font-bold uppercase tracking-wider mt-2">Retry</button>
-              </div>
-            )}
-          </div>
-          <div className="px-3 py-1.5 border-t border-white/5 text-right">
-            <span className="text-[9px] text-white/15 uppercase tracking-widest font-bold">Powered by GIPHY</span>
-          </div>
-        </div>
-      )}
+            <div className="py-2 flex items-center justify-center opacity-10">
+              <span className="text-[7px] font-black uppercase tracking-[0.2em]">GIPHY</span>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 };
+
 
 /* ─── Media Message Renderers ─── */
 const MediaMessageContent = ({ msg, isUnlocked, chatKey, chatId, onLightbox, onEphemeralView }) => {
@@ -370,19 +341,32 @@ const MediaMessageContent = ({ msg, isUnlocked, chatKey, chatId, onLightbox, onE
   // Decrypt metadata if needed
   useEffect(() => {
     const decryptAll = async () => {
-      if (!isUnlocked || !chatKey || !msg.media_meta?.ct) {
+      // 1. Unlocked check
+      if (!isUnlocked || !chatKey) {
         setDecryptedMeta(null);
         return;
       }
+
+      // 2. Identify "locked" fields
+      const metaToDecrypt = msg.media_meta;
+      const urlToDecrypt = msg.media_url;
+
+      if (!metaToDecrypt?.ct && (typeof urlToDecrypt !== 'string' || !urlToDecrypt?.includes('{"ct"'))) {
+        // Nothing encrypted here, just use raw if it's already a string url
+        return;
+      }
+
       try {
-        const dMeta = await decryptMetadata(msg.media_meta, chatKey, chatId);
-        let dUrl = msg.media_url;
-        if (typeof msg.media_url === 'object' && msg.media_url?.ct) {
-          const decryptedUrlObj = await decryptMetadata(msg.media_url, chatKey, chatId);
-          dUrl = decryptedUrlObj?.url || decryptedUrlObj;
-        }
+        // media.js decryptMetadata handles both raw objects and stringified JSON
+        const dMeta = await decryptMetadata(metaToDecrypt, chatKey, chatId);
+        const dUrlObj = await decryptMetadata(urlToDecrypt, chatKey, chatId);
+        
+        const dUrl = dUrlObj?.url || (typeof dUrlObj === 'string' ? dUrlObj : null);
+        
         setDecryptedMeta({ ...dMeta, _decryptedUrl: dUrl });
-      } catch (e) { console.error('[Media] Meta decrypt failed:', e); }
+      } catch (e) {
+        console.error('[Media] Meta decrypt failed:', e);
+      }
     };
     decryptAll();
   }, [msg.media_meta, msg.media_url, isUnlocked, chatKey, chatId]);
@@ -1907,7 +1891,21 @@ const App = () => {
   };
   const rejectFriendReq = async (id) => { try { await api.rejectFriendRequest(id); setIncomingRequests(p => p.filter(r => r.fromUserId !== id)); await loadNetwork(searchQuery); } catch {} };
   const unsendFriendReq = async (id) => { try { await api.unsendFriendRequest(id); setOutgoingRequests(p => p.filter(r => r.toUserId !== id)); await loadNetwork(searchQuery); } catch {} };
-  const removeFriend = async (id) => { if (!id || id === AI_USER.id) return; try { await api.removeFriend(id); if (activeChat?.id === id) setActiveChat(null); await loadNetwork(searchQuery); } catch {} };
+  const removeFriend = async (id) => { 
+    if (!id || id === AI_USER.id) return; 
+    
+    const confirmed = window.confirm("⚠️ Nuclear Option: Unfriending will permanently delete all Direct Messages between you and this user for BOTH of you. This is irreversible.\n\nAre you sure you want to proceed?");
+    if (!confirmed) return;
+
+    try { 
+      await api.removeFriend(id); 
+      if (activeChat?.id === id) setActiveChat(null); 
+      await loadNetwork(searchQuery); 
+    } catch (err) {
+      console.error("[Social] Unfriend failed:", err);
+      alert("Failed to unfriend: " + err.message);
+    } 
+  };
   const createGroup = async () => { const n = groupNameInput.trim(); if (n.length < 2) return; setIsCreatingGroup(true); try { await api.createGroup({ name: n }); setGroupNameInput(""); setShowCreateGroup(false); await loadNetwork(searchQuery); } catch {} finally { setIsCreatingGroup(false); } };
   const leaveGroup = async (gid) => { try { await api.leaveGroup(gid); if (activeGroup?.id === gid) setActiveGroup(null); await loadNetwork(searchQuery); } catch {} };
 

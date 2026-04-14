@@ -88,10 +88,17 @@ export const api = {
   removeFriend: async (targetId) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
+    
+    // 1. Delete the friendship (both directions in one call if using .or, or specific match)
     await supabase
       .from('friendships')
       .delete()
       .or(`and(user_id.eq.${user.id},friend_id.eq.${targetId}),and(user_id.eq.${targetId},friend_id.eq.${user.id})`);
+    
+    // 2. Nuclear Purge: Delete all private messages between these two users
+    const chatId = [user.id, targetId].sort().join(':');
+    await supabase.from('messages').delete().eq('chat_id', chatId);
+    
     return { ok: true };
   },
 
@@ -294,7 +301,7 @@ export const api = {
       iv: payload.iv || '',
       reply_to_id: replyToId,
       type: mediaInfo.type,           // 'image', 'gif', 'sticker'
-      media_url: mediaInfo.media_url,  // Storage path or external URL
+      media_url: typeof mediaInfo.media_url === 'object' ? JSON.stringify(mediaInfo.media_url) : mediaInfo.media_url,  // Storage path or external URL
       media_meta: mediaInfo.media_meta || {},
       ephemeral: mediaInfo.ephemeral || false
     };
@@ -332,7 +339,7 @@ export const api = {
       iv: payload.iv || '',
       reply_to_id: replyToId,
       type: mediaInfo.type,
-      media_url: mediaInfo.media_url,
+      media_url: typeof mediaInfo.media_url === 'object' ? JSON.stringify(mediaInfo.media_url) : mediaInfo.media_url,
       media_meta: mediaInfo.media_meta || {},
       ephemeral: mediaInfo.ephemeral || false
     };
