@@ -32,14 +32,12 @@ const KeyModal = ({ title, onClose, onSubmit }) => {
           <p className="text-[11px] text-amber-500/60 mt-1">Enter your shared encryption passkey</p>
         </div>
         <form onSubmit={(e) => { e.preventDefault(); onSubmit(value); }} className="space-y-6">
-          {/* Junk inputs to bait browser autofill */}
-          <input type="text" name="username" style={{ display: 'none' }} autoComplete="username" tabIndex="-1" />
-          <input type="password" name="password" style={{ display: 'none' }} autoComplete="current-password" tabIndex="-1" />
-          
           <input
             className="w-full bg-white/[0.05] border border-white/10 p-4 rounded-xl outline-none text-center text-base tracking-widest focus:border-amber-500/40 transition-all font-mono"
-            type="password" autoFocus placeholder="••••••••" value={value} 
-            autoComplete="new-password" name={`passkey_${Math.random().toString(36).substring(7)}`}
+            type="text" autoFocus placeholder="••••••••" value={value} 
+            spellCheck="false" autoCorrect="off" autoCapitalize="off"
+            style={{ WebkitTextSecurity: 'disc' }}
+            autoComplete="off" name={`key_${Math.random().toString(36).substring(7)}`}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") onSubmit(value); if (e.key === "Escape") onClose(); }}
           />
@@ -494,7 +492,8 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
         <form onSubmit={send} className={`bg-white/[0.04] rounded-xl px-3 md:px-4 flex items-center border ${replyTo || editingMsg ? 'border-t-0 rounded-t-none' : 'border-white/[0.06]'} focus-within:border-white/10 transition-colors`}>
           {!isUnlocked && <button type="button" onClick={() => setShowKey(true)} className="p-2.5 -ml-1 text-amber-500 active:text-amber-400"><Lock size={20} /></button>}
           <input ref={inputRef} disabled={!isUnlocked || isSending} 
-            autoComplete="one-time-code" name="message_body"
+            autoComplete="off" name="q_search"
+            data-lpignore="true" data-1p-ignore="true" data-form-type="other"
             spellCheck="false" autoCorrect="off" autoCapitalize="off"
             className="flex-1 bg-transparent py-3.5 text-[16px] md:text-[15px] outline-none text-white/80 placeholder:text-white/20 disabled:opacity-30"
             placeholder={isUnlocked ? `Message @${activeChat.username}` : "Tap 🔑 to unlock"} value={input} onChange={(e) => setInput(e.target.value)} />
@@ -806,7 +805,8 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
         <form onSubmit={send} className={`bg-white/[0.04] rounded-xl px-3 md:px-4 flex items-center border ${replyTo || editingMsg ? 'border-t-0 rounded-t-none' : 'border-white/[0.06]'} focus-within:border-white/10 transition-colors`}>
           {!isUnlocked && <button type="button" onClick={() => setShowKey(true)} className="p-2 -ml-1 text-amber-500"><Lock size={18} /></button>}
           <input ref={inputRef} disabled={!isUnlocked || isSending} 
-            autoComplete="one-time-code" name="group_message_body"
+            autoComplete="off" name="q_group_search"
+            data-lpignore="true" data-1p-ignore="true" data-form-type="other"
             spellCheck="false" autoCorrect="off" autoCapitalize="off"
             className="flex-1 bg-transparent py-3 text-[15px] outline-none text-white/80 placeholder:text-white/20 disabled:opacity-30"
             placeholder={isUnlocked ? `Message #${activeGroup.name}` : "Enter passkey to unlock"} value={input} onChange={(e) => setInput(e.target.value)} />
