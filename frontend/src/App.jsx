@@ -225,7 +225,9 @@ const MediaPicker = ({ onSelectFile, onSelectGif, onSelectSticker, onClose, ephe
               onChange={(e) => handleSearch(e.target.value)} 
               placeholder={`Search ${tab === 'gif' ? 'GIPHY' : 'stickers'}...`}
               className="w-full bg-black/20 border border-white/5 rounded-lg pl-8 pr-3 py-2 text-xs text-white/80 outline-none focus:border-indigo-500/20 focus:bg-black/30 transition-all placeholder:text-white/5"
-              autoFocus 
+              autoFocus autoComplete="chrome-off" 
+              name="media_search_query"
+              data-lpignore="true" data-1p-ignore="true" data-form-type="other"
             />
           </div>
         </div>
@@ -1704,6 +1706,26 @@ const App = () => {
   const [pwdForm, setPwdForm] = useState({ current: "", new: "" });
   const [pwdStatus, setPwdStatus] = useState(null);
   const [selectedUserForProfile, setSelectedUserForProfile] = useState(null);
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+
+  // Tactical PWA Capture
+  useEffect(() => {
+    const handler = (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      console.log("[PWA] Install prompt detected and captured.");
+    };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  const handleInstallPWA = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    console.log(`[PWA] User response to install prompt: ${outcome}`);
+    if (outcome === 'accepted') setDeferredPrompt(null);
+  };
 
   // Centralized identity registry for real-time consistency
   const [profiles, setProfiles] = useState({});
@@ -1990,9 +2012,13 @@ const App = () => {
       <aside className={`${mobileSidebarOpen ? 'flex' : 'hidden'} md:flex flex-col w-full md:w-[272px] flex-shrink-0 mobile-view-transition safe-top border-r transition-colors duration-300 ${theme === 'vibrant' ? 'bg-[#16161a] border-white/[0.08]' : 'bg-[#0c0c0e] border-white/[0.06]'}`}>
         {/* Search & Friends Top Bar */}
         <div className="px-3 py-3 pb-2 flex items-center gap-2.5">
+          <img src="/logo.png" alt="Cipher" className="w-[18px] h-[18px] opacity-80" />
           <div className="flex-1 min-w-0 flex items-center gap-2 bg-white/[0.03] border border-white/[0.06] rounded-xl px-2.5 py-[6px] focus-within:bg-white/[0.05] focus-within:border-indigo-500/30 transition-all">
             <Search size={13} className="text-white/20 flex-shrink-0" />
-            <input className="bg-transparent text-[11px] outline-none flex-1 text-white/70 placeholder:text-white/15 min-w-0" placeholder="Search..." value={sidebarFilter} onChange={(e) => setSidebarFilter(e.target.value)} autoComplete="off" />
+            <input className="bg-transparent text-[11px] outline-none flex-1 text-white/70 placeholder:text-white/15 min-w-0" 
+              placeholder="Search..." value={sidebarFilter} onChange={(e) => setSidebarFilter(e.target.value)} 
+              autoComplete="chrome-off" name="sidebar_filter_query"
+              data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
           </div>
           <button onClick={() => { setActiveChat(null); setActiveGroup(null); setMobileSidebarOpen(false); }}
             title="Friends"
@@ -2358,6 +2384,30 @@ const App = () => {
                            </button>
                         </div>
                       </section>
+
+                      {/* Tactical PWA Installation */}
+                      {deferredPrompt && (
+                        <section className="space-y-4 animate-in fade-in zoom-in-95 duration-500">
+                          <label className="text-[10px] font-bold uppercase tracking-widest text-white/30 px-1">Application Control</label>
+                          <div className="p-6 bg-indigo-600/5 border border-indigo-600/10 rounded-2xl space-y-4">
+                            <div className="flex items-center gap-4">
+                              <div className="p-3 bg-indigo-600/10 rounded-xl text-indigo-400">
+                                <Download size={24} />
+                              </div>
+                              <div>
+                                <h4 className="text-sm font-bold text-white">Native Installation</h4>
+                                <p className="text-xs text-white/40 mt-1">Install Cipher as a native PWA for a full-screen, high-performance tactical experience.</p>
+                              </div>
+                            </div>
+                            <button 
+                              onClick={handleInstallPWA}
+                              className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-[10px] font-black uppercase tracking-[0.2em] shadow-lg shadow-indigo-600/20 transition-all active:scale-[0.98]"
+                            >
+                              Install Cipher App
+                            </button>
+                          </div>
+                        </section>
+                      )}
                     </div>
                   )}
 
@@ -2526,7 +2576,10 @@ const App = () => {
                     <h3 className="text-sm font-semibold text-white/80 mb-1">Add Friend</h3>
                     <p className="text-[13px] text-white/25 mb-4">Search users by their username.</p>
                     <div className="flex items-center gap-2 bg-white/[0.04] border border-white/[0.06] rounded-lg px-4 py-3 focus-within:border-indigo-500/40 transition-colors">
-                      <input className="bg-transparent flex-1 text-sm outline-none text-white/80 placeholder:text-white/15" placeholder="Enter a username..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} autoComplete="off" />
+                      <input className="bg-transparent flex-1 text-sm outline-none text-white/80 placeholder:text-white/15" 
+                        placeholder="Enter a username..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} 
+                        autoComplete="chrome-off" name="friend_search_query"
+                        data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
                       <Search size={16} className="text-white/20" />
                     </div>
                   </div>
