@@ -115,7 +115,7 @@ npm run dev
 ---
 
 ## ⚖️ License
-Distributed under the **MIT License**. See `LICENSE` for more information.
+Distributed under a **Proprietary License**. All rights reserved. Unauthorized use, copying, or distribution is strictly prohibited.
 
 <div align="center">
   <p>Built with uncompromising focus by <strong>Antigravity</strong>.</p>
