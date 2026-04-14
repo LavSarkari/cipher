@@ -1,94 +1,122 @@
-# <p align="center"><img src="frontend/public/logo.png" width="128" alt="Cipher Logo"><br>CIPHER</p>
+<div align="center">
+  <img src="frontend/public/logo.png" width="140" alt="Cipher Logo">
+  <h1>CIPHER</h1>
 
+  <p><strong>ENCRYPTED. MINIMALIST. PRIVATE.</strong></p>
+  <p><em>The definitive next-generation secure messaging platform for power users.</em></p>
+
+  <p>
+    <img src="https://img.shields.io/badge/Security-AES--256--GCM-indigo?style=for-the-badge" alt="Encryption">
+    <img src="https://img.shields.io/badge/Architecture-PWA-blue?style=for-the-badge" alt="PWA">
+    <img src="https://img.shields.io/badge/Backend-Supabase-3ECF8E?style=for-the-badge" alt="Supabase">
+    <img src="https://img.shields.io/badge/UI-React_&_Vite-61dafb?style=for-the-badge" alt="React">
+  </p>
+</div>
+
+---
+
+## 📸 Showcase
+
+### Desktop Experience
+![Desktop View](screenshots/desktop.png)
+
+### Mobile & PWA
 <p align="center">
-  <strong>Encrypted. Minimalist. Private.</strong><br>
-  <em>The next-generation secure messaging platform built for the elite.</em>
+  <img src="screenshots/mobile.png" width="350" alt="Mobile View">
 </p>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Security-E2EE-indigo?style=for-the-badge" alt="E2EE">
-  <img src="https://img.shields.io/badge/Database-Supabase-blue?style=for-the-badge" alt="Supabase">
-  <img src="https://img.shields.io/badge/Language-Javascript-yellow?style=for-the-badge" alt="JS">
-  <img src="https://img.shields.io/badge/UI-React-61dafb?style=for-the-badge" alt="React">
-</p>
+---
+
+## 🚫 The Problem: The Postcard
+Using standard messaging apps (like Discord, Instagram, or standard server-relays) is exactly like sending a **postcard through the mail**. 
+The postman, the delivery facility, and the corporate mailroom can simply flip it over and read every word. The companies hosting your chats hold the "master skeleton key" to your data. If their servers are breached, hacked, or compromised, all your private messages, photos, and histories are instantly exposed in plaintext to the public. 
+
+## 🛡️ The Solution: The Titanium Lockbox
+**Cipher** is completely different; it is a **Zero-Trust Messenger**. 
+Using Cipher is like locking your message inside a **titanium safe** before handing it to the postman.
+We (the app's infrastructure) transport the safe with lightning speed, but we are mathematically blind to what's inside. Only the true recipient—the friend who holds the exact identical key locally in their hands—can open it. 
+Even if our entire remote database is stolen by a hacker tomorrow, all they get is a massive mountain of unbreakable titanium safes.
 
 ---
 
-## 🔒 Zero-Trust Architecture
+## 🔒 The Zero-Trust Architecture
 
-**Cipher** is engineered from the ground up with a zero-trust mindset. Unlike standard messaging apps, we never see your data. Your messages are encrypted long before they ever touch our infrastructure.
+**Cipher** is engineered from the ground up with an absolute zero-trust mindset. Unlike commercial messaging applications, we are mathematically blind to your data. Your messages, media metadata, and group semantics are rigorously encrypted client-side long before they ever touch our routing infrastructure.
 
-### The Security Stack
-- **Web Crypto API**: Industry-standard high-performance primitives.
-- **PBKDF2**: Key derivation with 100,000 iterations for bulletproof passkeys.
-- **AES-256-GCM**: Military-grade symmetric encryption with random initialization vectors (IV) for every single message.
-- **Zero-Log Store**: Our database only holds ciphertext. Without your local shared key, even our admins are blind.
+### The Cryptographic Stack
+- **Web Crypto API**: High-performance, native browser cryptographic primitives.
+- **PBKDF2 Key Derivation**: Hardened passkey derivation leveraging 100,000 iterations to actively deter brute-force attacks.
+- **AES-256-GCM**: Military-grade symmetric encryption delivering authenticated encryption. Every payload utilizes a randomized Initialization Vector (IV).
+- **Stealth Data Store**: Our Supabase PostgreSQL infrastructure acts entirely as a dumb relay. It routes raw ciphertext. Without your local volatile decryption key, the data is useless entropy.
 
----
+### 🧠 How Encryption Actually Works in Cipher
+Cipher uses genuine **End-to-End Encryption (E2EE)**. This means your private communications are locked before they ever leave your screen. Here is how your data is handled:
 
-## 🔥 Key Features
+1. **The Keys (Offline Agreement)**: You and your conversation partner securely agree on a secret passkey in real life or via another secure channel.
+2. **The Vault (Encryption)**: The moment you hit send, your browser crushes that passkey through 100,000 algorithmic cycles (PBKDF2) to forge a master cryptographic key. It then uses **AES-256-GCM** to scramble your text, images, and GIFs into a completely unrecognizable matrix of characters.
+3. **The Relay (Transit & Storage)**: This scrambled noise (Ciphertext) is dispatched to our cloud database. If a hacker, a government, or even our own server administrators intercept the data, they will only see absolute gibberish. **We do not have your keys. We cannot read your chats.**
+4. **The Unlocking (Decryption)**: When your friend opens the app, their device pulls the scrambled data from the cloud. Their browser uses the exact same shared passkey to unlock and reveal the message locally.
 
-- **⚡ Real-time Pulse**: Instant message delivery using Supabase real-time event bus.
-- **👥 Dynamic Groups**: Create, join, and manage private groups with shared encryption contexts.
-- **🤖 Gemini AI Integration**: A secure AI relay for assistant-based queries within the app.
-- **🌑 Stealth Mode UI**: A premium, high-contrast dark theme optimized for focused communication.
-- **📱 PWA & Mobile UX**: High-performance interaction hooks (`useLongPress`), native selection protection, and resilient touch handling for a native-app feel.
-- **👥 Advanced Group Management**: Secure group creation, friend-based invitations, and robust RLS (Row Level Security) membership logic.
-- **🛡️ Production Hardened**: Intelligent input focus management, anti-autofill masking, and real-time username resolution caches.
-- **⌨️ Discord-Style Interaction**: Familiar commands, typing indicators, message grouping (stitching), and smooth scroll pinning.
+*Zero stored passwords. Zero master skeleton keys. Total communication blackout to the outside world.*
 
 ---
 
-## 🛠️ Technical Overview
+## 🔥 Elite Feature Set
 
-### Message Flow (E2EE)
+### 🛡️ Uncompromised Privacy
+- **E2EE Media Sharing**: Share images, GIFs, and stickers with total confidence. Not just the files, but the file *metadata* (width, height, types) is fully encrypted.
+- **Total Data Annihilation**: Implement true ephemeral messaging. Deleting a message chemically burns the payload from the remote Supabase database and storage buckets.
 
-```mermaid
-sequenceDiagram
-    participant UserA as Sender (Alice)
-    participant DB as Supabase (Encrypted Store)
-    participant UserB as Receiver (Bob)
+### ⚡ Lightning Fast UX
+- **Chronological Dynamic Sorting**: The sidebar DM list intelligently auto-sorts in real-time. New messages instantly rocket conversations to the top of the stack.
+- **Discord-Style Aesthetics**: Familiar interfaces, intelligent message grouping (stitching), glowing unread indicators, and a resilient dark mode.
+- **PWA Grade Mobile Integration**: Installable to Android/iOS home screens. Features custom virtual back-button navigation hooks and aggressive heuristic overrides to prevent OS password managers from hijacking the chat inputs.
 
-    Note over UserA, UserB: Shared Passkey established offline
-    UserA->>UserA: Plaintext + Passkey -> AES-256-GCM
-    UserA->>DB: POST ciphertext + IV
-    DB-->>UserB: Real-time Broadcast (Ciphertext)
-    UserB->>UserB: Ciphertext + IV + Passkey -> Plaintext
-    Note right of UserB: Message Decrypted
+---
+
+## 🛠️ Infrastructure & Tech Stack
+
+- **Frontend Core**: React 18, Vite, TailwindCSS
+- **Styling**: Modern dark-mode aesthetic with custom transitions and hardware-accelerated animations.
+- **Engine**: Supabase (PostgreSQL, Realtime, Storage, Auth)
+- **Encryption**: Browser-native Web Crypto API (AES-256-GCM & PBKDF2)
+- **Deployment**: Optimized for high-performance Edge hosting.
+
+---
+
+## 🗺️ Roadmap (Coming Soon)
+
+- [ ] **WebRTC Voice & Video**: Fully encrypted peer-to-peer calling.
+- [ ] **Forward Secrecy**: Automatic session key rotation for maximum security.
+- [ ] **Ephemeral Profiles**: Temporary identities that vanish after inactivity.
+- [ ] **Message Reactions**: Securely encrypted emoji reactions to any message.
+
+---
+
+## 🚀 Deployment & Initialization
+
+### Prerequisites
+- Node.js (v18+)
+- A Supabase Project (Database + Storage + Realtime)
+
+### 1. Environment Configuration
+Duplicate the secure template and inject your Supabase API keys:
+```bash
+cd frontend
+cp .env.example .env
 ```
 
-### Folder Structure
-- `frontend/`: React + Vite application (The Cipher Client).
-- `database/`: SQL scripts for the Supabase schema and RLS policies.
-- `backend_legacy/`: Archive of the legacy node-based backend.
+### 2. Ignite the Client
+```bash
+npm install
+npm run dev
+```
 
 ---
 
-## 🚀 Getting Started
+## ⚖️ License
+Distributed under the **MIT License**. See `LICENSE` for more information.
 
-1.  **Environment Setup**:
-    - Copy `frontend/.env.example` to `frontend/.env`.
-    - Populate with your Supabase credentials.
-2.  **Install Dependencies**:
-    ```bash
-    cd frontend && npm install
-    ```
-3.  **Run Development**:
-    ```bash
-    npm run dev
-    ```
-
----
-
-## 🛡️ Security Best Practices
-
-Cipher is a robust baseline for private communication. For production deployment, always ensure:
-- **HTTPS Everywhere**: Mandatory for Web Crypto API.
-- **Key Rotation**: Implement periodic passkey updates for maximum security.
-- **HSTS**: High Security Transport Headers should be enabled on the server.
-
----
-
-<p align="center">
-  Developed with focus and precision by <strong>Antigravity</strong>.
-</p>
+<div align="center">
+  <p>Built with uncompromising focus by <strong>Antigravity</strong>.</p>
+</div>
