@@ -1719,6 +1719,14 @@ const App = () => {
   const [selectedUserForProfile, setSelectedUserForProfile] = useState(null);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [unreadCounts, setUnreadCounts] = useState({});
+  const [recentContacts, setRecentContacts] = useState([]);
+  const [dmTimestamps, setDmTimestamps] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('cipher_dm_timestamps')) || {}; } catch { return {}; }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('cipher_dm_timestamps', JSON.stringify(dmTimestamps));
+  }, [dmTimestamps]);
 
   // Tactical PWA Capture
   useEffect(() => {
@@ -1785,10 +1793,18 @@ const App = () => {
     let shouldNotify = false;
 
     if (type === 'message') {
-      const sender = profiles[payload.sender_id] || { username: 'Someone' };
+      const sender = profiles[payload.sender_id] || { id: payload.sender_id, username: payload.senderUsername || 'Someone', display_name: payload.senderDisplayName || null };
       title = `${sender.display_name || sender.username}`;
       body = "Message received";
       prefKey = "messages";
+      
+      // Bump to the top of recent contacts and update timestamp
+      setRecentContacts(prev => {
+        const filtered = prev.filter(u => u.id !== payload.sender_id);
+        return [sender, ...filtered];
+      });
+      setDmTimestamps(prev => ({ ...prev, [payload.sender_id]: Date.now() }));
+
       // Notify if backgrounded OR if we are not in this DM
       shouldNotify = notificationPrefs.messages && (document.visibilityState !== 'visible' || activeChat?.id !== payload.sender_id);
       
@@ -1815,17 +1831,23 @@ const App = () => {
     }
   }, [me?.id, profiles, myGroups, activeChat?.id, activeGroup?.id, notificationPrefs, showBrowserNotification]);
 
-  // Automatically clear unread counts when entering a chat
+  // Automatically clear unread counts when entering a chat and bump recent contacts
   useEffect(() => {
-    if (activeChat?.id) {
+    if (activeChat && !activeChat.isAI) {
       setUnreadCounts(prev => {
         if (!prev[activeChat.id]) return prev;
         const next = { ...prev };
         delete next[activeChat.id];
         return next;
       });
+      // Bump to top of recent DMs when viewing
+      setRecentContacts(prev => {
+        const filtered = prev.filter(u => u.id !== activeChat.id);
+        return [activeChat, ...filtered];
+      });
+      // NOTE: We do NOT bump dmTimestamps here so that simply clicking a user doesn't jump them to the top.
     }
-  }, [activeChat?.id]);
+  }, [activeChat]);
 
   // Global Realtime Listeners for Notifications
   useEffect(() => {
@@ -1838,6 +1860,21 @@ const App = () => {
         table: 'messages', 
         filter: `receiver_id=eq.${me.id}` 
       }, (p) => handleGlobalNotification('message', p.new))
+      .on('postgres_changes', { 
+        event: 'INSERT', 
+        schema: 'public', 
+        table: 'messages', 
+        filter: `sender_id=eq.${me.id}` 
+      }, (p) => {
+        // We sent a message! Bump them to the top globally.
+        const rId = p.new.receiver_id;
+        const receiver = profiles[rId] || { id: rId, username: 'User', display_name: null };
+        setRecentContacts(prev => {
+          const filtered = prev.filter(u => u.id !== rId);
+          return [receiver, ...filtered];
+        });
+        setDmTimestamps(prev => ({ ...prev, [rId]: Date.now() }));
+      })
       .on('postgres_changes', { 
         event: 'INSERT', 
         schema: 'public', 
@@ -2087,7 +2124,17 @@ const App = () => {
   const incomingIds = useMemo(() => new Set(incomingRequests.map(r => r.fromUserId)), [incomingRequests]);
   const outgoingIds = useMemo(() => new Set(outgoingRequests.map(r => r.toUserId)), [outgoingRequests]);
   const discoveredUsers = useMemo(() => users.filter(u => u.id !== me?.id && u.username.toLowerCase().includes(searchQuery.toLowerCase()) && !friends.some(f => f.id === u.id) && !incomingIds.has(u.id) && !outgoingIds.has(u.id)), [users, me?.id, searchQuery, friends, incomingIds, outgoingIds]);
-  const filteredFriends = useMemo(() => friends.filter(f => f.username.toLowerCase().includes(sidebarFilter.toLowerCase())), [friends, sidebarFilter]);
+  
+  const combinedFriends = useMemo(() => {
+    const list = [...recentContacts];
+    friends.forEach(f => {
+      if (!list.some(r => r.id === f.id)) list.push(f);
+    });
+    // Sort descending by most recently interacted (or 0 if never)
+    return list.sort((a, b) => (dmTimestamps[b.id] || 0) - (dmTimestamps[a.id] || 0));
+  }, [friends, recentContacts, dmTimestamps]);
+  
+  const filteredFriends = useMemo(() => combinedFriends.filter(f => f.username.toLowerCase().includes(sidebarFilter.toLowerCase())), [combinedFriends, sidebarFilter]);
   const filteredGroups = useMemo(() => myGroups.filter(g => g.name.toLowerCase().includes(sidebarFilter.toLowerCase())), [myGroups, sidebarFilter]);
 
   const isMainView = !activeChat && !activeGroup;
@@ -2140,7 +2187,7 @@ const App = () => {
             <Search size={13} className="text-white/20 flex-shrink-0" />
             <input className="bg-transparent text-[11px] outline-none flex-1 text-white/70 placeholder:text-white/15 min-w-0" 
               placeholder="Search..." value={sidebarFilter} onChange={(e) => setSidebarFilter(e.target.value)} 
-              autoComplete="chrome-off" name="sidebar_filter_query"
+              autoComplete="new-password" spellCheck="false"
               data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
           </div>
           <button onClick={() => { setActiveChat(null); setActiveGroup(null); setMobileSidebarOpen(false); }}
@@ -2159,33 +2206,65 @@ const App = () => {
 
         {/* Scrollable list */}
         <div className="flex-1 overflow-y-auto discord-scrollbar px-2 space-y-0.5">
-          {/* DMs */}
-          <div className="flex items-center justify-between px-2 pt-3 pb-1">
-            <span className={`text-[11px] font-semibold uppercase tracking-wide transition-colors ${theme === 'vibrant' ? 'text-white/40' : 'text-white/20'}`}>Direct Messages</span>
+          <div className="flex items-center justify-between px-2 pt-3 pb-1 group cursor-pointer hover:text-white transition-colors text-[#949ba4]">
+            <span className={`text-[11px] font-bold uppercase tracking-wide transition-colors ${theme === 'vibrant' ? 'text-white/40' : ''}`}>Direct Messages</span>
+            <button onClick={() => { setActiveChat(null); setActiveGroup(null); setIsSettingsView(false); setMobileSidebarOpen(false); }} className="opacity-0 group-hover:opacity-100 transition-opacity" title="Create DM">
+              <Plus size={16} />
+            </button>
           </div>
-          {filteredFriends.map(f => (
+          {filteredFriends.map(f => {
+            const isUnread = unreadCounts[f.id] > 0;
+            const isActive = activeChat?.id === f.id && !isSettingsView;
+            
+            return (
             <div key={f.id} className="relative group">
+              {/* Discord-style Unread/Active Pill Indicator */}
+              <div className={`absolute -left-2 w-1 bg-white rounded-r-full transition-all duration-300 origin-left ease-out ${
+                isActive 
+                  ? 'h-10 scale-100 opacity-100'  
+                  : isUnread 
+                    ? 'h-2 scale-100 opacity-100 drop-shadow-[0_0_6px_rgba(255,255,255,1)]' 
+                    : 'h-2 scale-0 opacity-0 group-hover:scale-100 group-hover:opacity-100 delay-75 group-hover:bg-white/20'
+              }`} style={{ top: '50%', transform: 'translateY(-50%)' }} />
+
               <button onClick={() => { setActiveChat(f); setActiveGroup(null); setIsSettingsView(false); setMobileSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3 px-2.5 py-2 md:py-1.5 rounded-lg transition-colors active:scale-[0.98] ${activeChat?.id === f.id && !isSettingsView ? 'bg-white/[0.06] text-white' : 'text-white/40 active:bg-white/[0.04]'}`}>
+                className={`w-full flex items-center gap-3 px-2.5 py-[7px] md:py-[6px] rounded-lg transition-colors active:scale-[0.98] ${isActive ? 'bg-white/[0.08] text-white' : 'hover:bg-white/[0.04] group active:bg-white/[0.06]'}`}>
                 <div 
                   onClick={(e) => { e.stopPropagation(); handleViewProfile(f.id); }}
-                  className="relative w-9 md:w-8 h-9 md:h-8 flex-shrink-0 cursor-pointer hover:shadow-[0_0_10px_rgba(99,102,241,0.2)] transition-all"
+                  className="relative w-9 md:w-8 h-9 md:h-8 flex-shrink-0 cursor-pointer hover:shadow-lg transition-all"
                 >
                   <div className={`w-full h-full rounded-full flex items-center justify-center text-xs font-bold ${f.isAI ? 'bg-indigo-600/25 text-indigo-400' : 'bg-[#2b2d31] text-indigo-400/50'}`}>
-                    {f.isAI ? <Sparkles size={14} /> : <CipherMascot className="w-full h-full p-2" id={profiles[f.id]?.avatar_id || f.avatar_id} />}
+                    {f.isAI ? <Sparkles size={14} /> : <CipherMascot className="w-full h-full p-[7px]" id={profiles[f.id]?.avatar_id || f.avatar_id} />}
                   </div>
                   {!f.isAI && (
-                    <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-[#121215] transition-colors ${
-                      !onlineUsers.has(f.id) || profiles[f.id]?.status === 'invisible' ? 'bg-white/20' : 
+                    <div className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-[3px] transition-colors ${theme === 'vibrant' ? 'border-[#16161a]' : 'border-[#0c0c0e]'} ${
+                      !onlineUsers.has(f.id) || profiles[f.id]?.status === 'invisible' ? 'bg-[#80848e]' : 
                       profiles[f.id]?.status === 'idle' ? 'bg-[#f0b232]' : 
                       profiles[f.id]?.status === 'dnd' ? 'bg-[#f23f43]' : 'bg-[#23a55a]'
                     }`} />
                   )}
                 </div>
-                <span className="text-[14px] md:text-[13px] truncate">{profiles[f.id]?.display_name || f.display_name || f.username}</span>
+                <div className="flex-1 min-w-0 flex items-center justify-between">
+                  <span className={`text-[15px] md:text-[14px] truncate text-left transition-colors flex-1 ${
+                    isActive 
+                      ? 'text-white font-semibold' 
+                      : isUnread 
+                        ? 'text-white font-black drop-shadow-[0_0_8px_rgba(255,255,255,0.7)]' 
+                        : 'text-[#949ba4] font-medium group-hover:text-[#dbdee1]'
+                  }`}>
+                    {profiles[f.id]?.display_name || f.display_name || f.username}
+                  </span>
+                  {/* Optional red badge, discord hides number for DMs but shows it explicitly if preferred */}
+                  {isUnread && (
+                    <span className="flex-shrink-0 bg-red-500 rounded-full w-4 h-4 flex items-center justify-center text-[9px] font-black text-white shadow-sm ring-[3px] ring-[#0c0c0e]">
+                      {unreadCounts[f.id] > 9 ? '9+' : unreadCounts[f.id]}
+                    </span>
+                  )}
+                </div>
               </button>
             </div>
-          ))}
+            );
+          })}
 
           {/* Groups */}
           <div className="flex items-center justify-between px-2 pt-4 pb-1">
