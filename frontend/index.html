@@ -28,10 +28,27 @@
       .discord-scrollbar::-webkit-scrollbar-track { background: transparent; }
       .discord-scrollbar::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
       .discord-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+      
+      .squircle {
+        mask-image: paint(squircle);
+        -webkit-mask-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyMDAgMjAwIj48cGF0aCBkPSJNMTAwLDAgQzIwLDAgMCwyMCAwLDEwMCBDMCwxODAgMjAsMjAwIDEwMCwyMDAgQzE4MCwyMDAgMjAwLDE4MCAyMDAsMTAwIEMyMDAsMjAgMTgwLDAgMTAwLDAgWiIvPjwvc3ZnPg==");
+        -webkit-mask-size: cover;
+        mask-size: cover;
+        border-radius: 24%;
+      }
+
+      .cipher-grid {
+        background-image: 
+          linear-gradient(rgba(99, 102, 241, 0.04) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(99, 102, 241, 0.04) 1px, transparent 1px);
+        background-size: 24px 24px;
+      }
+
       @supports (padding-bottom: env(safe-area-inset-bottom)) {
         .safe-bottom { padding-bottom: max(1.25rem, env(safe-area-inset-bottom)) !important; }
         .safe-top { padding-top: env(safe-area-inset-top) !important; }
       }
+
     </style>
   </head>
   <body class="bg-[#0a0a0c] text-white selection:bg-indigo-500/30 overscroll-none">

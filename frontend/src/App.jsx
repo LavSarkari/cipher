@@ -2,21 +2,44 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import {
   AlertCircle, Bell, ChevronLeft, Fingerprint, Info, Key, Loader2,
   LogOut, MessageSquare, Plus, Search, Send, Settings as SettingsIcon,
-  ShieldCheck, Sparkles, User as UserIcon, UserMinus, UserPlus,
-  Users as GroupsIcon, X, AtSign, Hash, Lock, Menu, Check as CheckIcon,
-  CornerUpLeft, Edit2, Smile, MoreHorizontal
+  ShieldCheck, Shield, Sparkles, User as UserIcon, UserMinus, UserPlus,
+  Users as GroupsIcon, X, AtSign, Hash, Lock, Menu, Check as CheckIcon, Check,
+  CornerUpLeft, Edit2, Smile, MoreHorizontal, Palette,
+  Image as ImageIcon, Paperclip, Gift, Eye, EyeOff, Download, Flame, Maximize2
 } from "lucide-react";
 import { api } from "./lib/api";
+import { supabase } from "./lib/supabase";
 import { decryptMessage, encryptMessage } from "./crypto/e2ee";
 import { formatDiscordTime, formatDateSeparator, groupMessages } from "./lib/helpers";
 import { usePresence, useTypingIndicator, useMessageListener, useTableListener } from "./lib/realtime";
 import { saveMessages } from "./lib/db";
+import { processMediaForUpload, decryptFile, searchGifs, searchStickers, CIPHER_STICKERS, formatFileSize } from "./lib/media";
 
-const AI_USER = { id: "ai-999", username: "Gemini AI", isAI: true };
+const AI_USER = { id: "ai-999", username: "Cipher AI", isAI: true };
 const NOTIFICATION_PREFS_KEY = "cipher_notification_prefs";
 const DEFAULT_NOTIFICATION_PREFS = { messages: true, friendRequests: true, groupRequests: true, sounds: true };
 const chatIdFor = (a, b) => [a, b].sort().join(":");
 const groupChatIdFor = (gid) => `group:${gid}`;
+
+/* ─── Cipher Mascot Avatar Variants ─── */
+const CipherMascot = ({ className = "w-full h-full p-3 text-white/50", id = 1 }) => {
+  const variants = {
+    1: <><circle cx="35" cy="45" r="7" fill="currentColor"/><circle cx="65" cy="45" r="7" fill="currentColor"/><path d="M 30 65 Q 50 80 70 65" stroke="currentColor" strokeWidth="8" strokeLinecap="round" /></>,
+    2: <><rect x="28" y="38" width="14" height="14" rx="3" fill="currentColor"/><rect x="58" y="38" width="14" height="14" rx="3" fill="currentColor"/><path d="M 35 70 h 30" stroke="currentColor" strokeWidth="8" strokeLinecap="round" /></>,
+    3: <><path d="M 30 50 l 10 -10 l 10 10 M 60 50 l 10 -10 l 10 10" stroke="currentColor" strokeWidth="6" strokeLinecap="round"/><circle cx="50" cy="70" r="5" fill="currentColor"/></>,
+    4: <><circle cx="35" cy="45" r="5" fill="currentColor"/><circle cx="65" cy="45" r="5" fill="currentColor"/><path d="M 30 60 Q 50 75 70 60" stroke="currentColor" strokeWidth="6" strokeLinecap="round" /></>,
+    5: <><line x1="25" y1="45" x2="45" y2="45" stroke="currentColor" strokeWidth="8" strokeLinecap="round"/><line x1="55" y1="45" x2="75" y2="45" stroke="currentColor" strokeWidth="8" strokeLinecap="round"/><path d="M 40 70 h 20" stroke="currentColor" strokeWidth="8" strokeLinecap="round" /></>,
+    6: <><circle cx="35" cy="45" r="8" fill="currentColor"/><circle cx="65" cy="45" r="8" fill="currentColor"/><path d="M 35 70 Q 50 60 65 70" stroke="currentColor" strokeWidth="6" strokeLinecap="round" /></>,
+    7: <><rect x="30" y="40" width="10" height="10" fill="currentColor"/><rect x="60" y="40" width="10" height="10" fill="currentColor"/><rect x="40" y="65" width="20" height="6" fill="currentColor"/></>,
+    8: <><circle cx="35" cy="40" r="6" fill="currentColor"/><circle cx="65" cy="40" r="6" fill="currentColor"/><path d="M 30 65 Q 50 85 70 65 q -20 0 -40 0" stroke="currentColor" strokeWidth="4" strokeLinecap="round" /></>,
+    9: <><path d="M 25 45 q 10 -10 20 0" stroke="currentColor" strokeWidth="6" strokeLinecap="round"/><path d="M 55 45 q 10 -10 20 0" stroke="currentColor" strokeWidth="6" strokeLinecap="round"/><circle cx="50" cy="70" r="4" fill="currentColor"/></>,
+  };
+  return (
+    <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+      {variants[id] || variants[1]}
+    </svg>
+  );
+};
 
 /* ─── Key Modal ─── */
 const KeyModal = ({ title, onClose, onSubmit }) => {
@@ -107,8 +130,355 @@ const MessageContextMenu = ({ x, y, msg, isOwn, onClose, onReply, onEdit, onReac
   );
 };
 
+/* ─── Media Picker (Tabbed: Upload / GIFs / Stickers) ─── */
+const MediaPicker = ({ onSelectFile, onSelectGif, onSelectSticker, onClose, ephemeral, onToggleEphemeral }) => {
+  const [tab, setTab] = useState('upload'); // 'upload' | 'gif' | 'sticker'
+  const [gifQuery, setGifQuery] = useState('');
+  const [stickerQuery, setStickerQuery] = useState('');
+  const [gifs, setGifs] = useState([]);
+  const [stickers, setStickers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const fileInputRef = useRef(null);
+  const debounceRef = useRef(null);
+
+  // Load trending on mount
+  useEffect(() => {
+    if (tab === 'gif') {
+      setLoading(true);
+      searchGifs('').then(setGifs).finally(() => setLoading(false));
+    } else if (tab === 'sticker') {
+      setLoading(true);
+      searchStickers('').then(setStickers).finally(() => setLoading(false));
+    }
+  }, [tab]);
+
+  const handleGifSearch = (q) => {
+    setGifQuery(q);
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setLoading(true);
+      const results = await searchGifs(q);
+      setGifs(results);
+      setLoading(false);
+    }, 400);
+  };
+
+  const handleStickerSearch = (q) => {
+    setStickerQuery(q);
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setLoading(true);
+      const results = await searchStickers(q);
+      setStickers(results);
+      setLoading(false);
+    }, 400);
+  };
+
+  return (
+    <div className="absolute bottom-full left-0 right-0 mb-2 mx-2 bg-[#111214] border border-white/10 rounded-2xl shadow-2xl overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-2 duration-200" style={{ maxHeight: '380px' }}>
+      {/* Tab Bar */}
+      <div className="flex items-center justify-between border-b border-white/[0.06] px-3 py-2">
+        <div className="flex gap-1">
+          {[
+            { id: 'upload', icon: ImageIcon, label: 'Upload' },
+            { id: 'gif', icon: Gift, label: 'GIF' },
+            { id: 'sticker', icon: Smile, label: 'Stickers' },
+          ].map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all ${tab === t.id ? 'bg-indigo-500/20 text-indigo-400' : 'text-white/30 hover:text-white/60 hover:bg-white/5'}`}>
+              <t.icon size={14} />
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          {tab === 'upload' && (
+            <button onClick={onToggleEphemeral} title="Burn After Reading"
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${ephemeral ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' : 'text-white/20 hover:text-white/40'}`}>
+              <Flame size={12} />
+              {ephemeral ? 'ON' : 'OFF'}
+            </button>
+          )}
+          <button onClick={onClose} className="p-1.5 text-white/20 hover:text-white/60 rounded-lg hover:bg-white/5 transition-colors"><X size={16} /></button>
+        </div>
+      </div>
+
+      {/* Upload Tab */}
+      {tab === 'upload' && (
+        <div className="p-6 flex flex-col items-center justify-center min-h-[200px]">
+          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) { onSelectFile(file); onClose(); }
+            e.target.value = '';
+          }} />
+          <button onClick={() => fileInputRef.current?.click()}
+            className="w-full max-w-xs p-8 border-2 border-dashed border-white/10 rounded-2xl hover:border-indigo-500/40 hover:bg-indigo-500/5 transition-all group flex flex-col items-center gap-3 cursor-pointer">
+            <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 flex items-center justify-center group-hover:bg-indigo-500/20 transition-colors">
+              <ImageIcon size={24} className="text-indigo-400" />
+            </div>
+            <div className="text-center">
+              <p className="text-sm font-bold text-white/60 group-hover:text-white/80 transition-colors">Click to Upload</p>
+              <p className="text-[10px] text-white/20 mt-1">JPEG, PNG, WebP • Max 10MB</p>
+            </div>
+          </button>
+          {ephemeral && (
+            <div className="mt-4 flex items-center gap-2 text-orange-400/70 text-[11px]">
+              <Flame size={14} />
+              <span className="font-medium">View Once — Media will self-destruct after viewing</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* GIF Tab */}
+      {tab === 'gif' && (
+        <div className="flex flex-col" style={{ maxHeight: '320px' }}>
+          <div className="p-2 border-b border-white/5">
+            <input value={gifQuery} onChange={(e) => handleGifSearch(e.target.value)} placeholder="Search GIFs..."
+              className="w-full bg-white/[0.04] border border-white/[0.06] rounded-lg px-3 py-2 text-xs text-white/80 outline-none placeholder:text-white/20 focus:border-indigo-500/30 transition-colors" autoFocus />
+          </div>
+          <div className="flex-1 overflow-y-auto p-2 discord-scrollbar">
+            {loading ? (
+              <div className="flex items-center justify-center py-8"><Loader2 size={20} className="animate-spin text-white/20" /></div>
+            ) : (
+              <div className="grid grid-cols-3 gap-1.5">
+                {gifs.map(g => (
+                  <button key={g.id} onClick={() => { onSelectGif(g); onClose(); }}
+                    className="relative rounded-lg overflow-hidden hover:ring-2 hover:ring-indigo-500 transition-all group aspect-square bg-white/5">
+                    <img src={g.preview || g.url} alt={g.title} className="w-full h-full object-cover" loading="lazy" />
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
+                      <Gift size={18} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+            {!loading && gifs.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-8 text-center px-4">
+                <Gift size={24} className="text-white/10 mb-2" />
+                <p className="text-white/30 text-xs font-semibold">No GIFs found</p>
+                <p className="text-white/10 text-[10px] mt-1 max-w-[200px]">Check your connection or update your Giphy API key in media.js</p>
+              </div>
+            )}
+          </div>
+          <div className="px-3 py-1.5 border-t border-white/5 flex items-center justify-between">
+            <button onClick={() => searchGifs(gifQuery).then(setGifs)} className="text-[9px] text-indigo-400 hover:text-indigo-300 font-bold uppercase tracking-wider">Retry</button>
+            <span className="text-[9px] text-white/15 uppercase tracking-widest font-bold">Powered by GIPHY</span>
+          </div>
+        </div>
+      )}
+
+      {/* Sticker Tab */}
+      {tab === 'sticker' && (
+        <div className="flex flex-col" style={{ maxHeight: '320px' }}>
+          <div className="p-2 border-b border-white/5">
+            <input value={stickerQuery} onChange={(e) => handleStickerSearch(e.target.value)} placeholder="Search stickers..."
+              className="w-full bg-white/[0.04] border border-white/[0.06] rounded-lg px-3 py-2 text-xs text-white/80 outline-none placeholder:text-white/20 focus:border-indigo-500/30 transition-colors" autoFocus />
+          </div>
+          {/* Cipher Originals Row */}
+          <div className="px-3 pt-3 pb-1">
+            <p className="text-[9px] font-bold text-white/20 uppercase tracking-widest mb-2">Cipher Originals (3D)</p>
+            <div className="flex gap-2.5 overflow-x-auto pb-2 discord-scrollbar">
+              {CIPHER_STICKERS.map(s => (
+                <button key={s.id} onClick={() => { onSelectSticker(s); onClose(); }} title={s.name}
+                  className="flex-shrink-0 w-16 h-16 bg-white/[0.04] rounded-xl hover:bg-indigo-500/20 hover:scale-110 transition-all flex items-center justify-center border border-white/5 hover:border-indigo-500/30 overflow-hidden p-1 group">
+                  {s.url ? (
+                    <img src={s.url} alt={s.name} className="w-full h-full object-contain drop-shadow-lg" />
+                  ) : (
+                    <span className="text-3xl">{s.emoji}</span>
+                  )}
+                  <div className="absolute inset-x-0 bottom-0 py-0.5 bg-indigo-500/80 translate-y-full group-hover:translate-y-0 transition-transform text-[8px] font-bold text-white">
+                    {s.name}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="h-px bg-white/5 mx-3" />
+          {/* Giphy Stickers */}
+          <div className="flex-1 overflow-y-auto p-2 discord-scrollbar">
+            {loading ? (
+              <div className="flex items-center justify-center py-8"><Loader2 size={20} className="animate-spin text-white/20" /></div>
+            ) : (
+              <div className="grid grid-cols-3 gap-1.5">
+                {stickers.map(s => (
+                  <button key={s.id} onClick={() => { onSelectSticker(s); onClose(); }}
+                    className="relative rounded-lg overflow-hidden hover:ring-2 hover:ring-indigo-500 transition-all group aspect-square bg-white/[0.02]">
+                    <img src={s.preview || s.url} alt={s.title} className="w-full h-full object-contain p-1" loading="lazy" />
+                  </button>
+                ))}
+              </div>
+            )}
+            {!loading && stickers.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-8 text-center px-4">
+                <p className="text-white/30 text-xs font-semibold">No stickers found</p>
+                <button onClick={() => searchStickers(stickerQuery).then(setStickers)} className="text-[9px] text-indigo-400 hover:text-indigo-300 font-bold uppercase tracking-wider mt-2">Retry</button>
+              </div>
+            )}
+          </div>
+          <div className="px-3 py-1.5 border-t border-white/5 text-right">
+            <span className="text-[9px] text-white/15 uppercase tracking-widest font-bold">Powered by GIPHY</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ─── Media Message Renderers ─── */
+const MediaMessageContent = ({ msg, isUnlocked, chatKey, chatId, onLightbox, onEphemeralView }) => {
+  const [imageUrl, setImageUrl] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+  const [revealed, setRevealed] = useState(false);
+  const meta = msg.media_meta || {};
+  const type = msg.type || 'text';
+
+  // Handle GIF messages
+  if (type === 'gif') {
+    return (
+      <div className="rounded-xl overflow-hidden max-w-[320px] cursor-pointer hover:opacity-90 transition-opacity" onClick={() => onLightbox?.(msg.media_url)}>
+        <img src={msg.media_url} alt="GIF" className="w-full rounded-xl" style={{ maxHeight: '280px', objectFit: 'cover' }} loading="lazy" />
+      </div>
+    );
+  }
+
+  // Handle Sticker messages (no bubble)
+  if (type === 'sticker') {
+    const stickerUrl = msg.media_url || meta.url;
+    if (stickerUrl) {
+      return (
+        <div className="max-w-[160px] animate-in fade-in zoom-in duration-500">
+          <img src={stickerUrl} alt="Sticker" className="w-full h-auto drop-shadow-2xl translate-z-0" style={{ maxHeight: '160px', objectFit: 'contain' }} loading="lazy" />
+        </div>
+      );
+    }
+    if (meta.emoji) {
+      // Fallback to emoji if no URL
+      return <span className="text-6xl select-none animate-in fade-in zoom-in duration-500">{meta.emoji}</span>;
+    }
+  }
+
+  // Handle encrypted Image messages
+  if (type === 'image') {
+    // Ephemeral handling
+    if (msg.ephemeral && !revealed && msg.viewed_at) {
+      return (
+        <div className="rounded-xl bg-white/[0.03] border border-white/5 p-4 flex items-center gap-3 max-w-[280px]">
+          <EyeOff size={18} className="text-orange-400/50" />
+          <div>
+            <p className="text-xs font-bold text-orange-400/60">Media Expired</p>
+            <p className="text-[10px] text-white/20">This was a view-once message</p>
+          </div>
+        </div>
+      );
+    }
+
+    if (msg.ephemeral && !revealed) {
+      return (
+        <button onClick={() => { setRevealed(true); onEphemeralView?.(msg); }}
+          className="rounded-xl overflow-hidden max-w-[280px] relative group cursor-pointer">
+          <div className="w-[200px] h-[150px] bg-gradient-to-br from-orange-500/10 via-orange-600/5 to-transparent border border-orange-500/20 rounded-xl flex flex-col items-center justify-center gap-2 group-hover:border-orange-500/40 transition-all">
+            <div className="w-10 h-10 rounded-full bg-orange-500/10 flex items-center justify-center group-hover:bg-orange-500/20 transition-colors">
+              <Eye size={20} className="text-orange-400" />
+            </div>
+            <span className="text-[11px] font-bold text-orange-400/70 uppercase tracking-wider">View Once</span>
+            <span className="text-[9px] text-white/20">Tap to reveal</span>
+          </div>
+        </button>
+      );
+    }
+
+    // Decrypt and display
+    const loadImage = async () => {
+      if (imageUrl || loading || !isUnlocked || !chatKey) return;
+      setLoading(true);
+      try {
+        const blob = await api.downloadMedia(msg.media_url);
+        const buffer = await blob.arrayBuffer();
+        const decrypted = await decryptFile(buffer, chatKey, chatId);
+        const url = URL.createObjectURL(new Blob([decrypted], { type: meta.mimeType || 'image/jpeg' }));
+        setImageUrl(url);
+      } catch (e) {
+        console.error('[Media] Decrypt failed:', e);
+        setError(true);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    // Auto-load when unlocked
+    useEffect(() => { loadImage(); }, [isUnlocked, chatKey]);
+    // Cleanup
+    useEffect(() => { return () => { if (imageUrl) URL.revokeObjectURL(imageUrl); }; }, [imageUrl]);
+
+    return (
+      <div className="rounded-xl overflow-hidden max-w-[320px] relative group cursor-pointer" onClick={() => imageUrl && onLightbox?.(imageUrl)}>
+        {/* Blur-up thumbnail */}
+        {meta.thumbnail && !imageUrl && (
+          <img src={meta.thumbnail} alt="" className="w-full rounded-xl" style={{ filter: 'blur(15px)', transform: 'scale(1.1)', maxHeight: '280px', objectFit: 'cover' }} />
+        )}
+        {/* Full image */}
+        {imageUrl && (
+          <img src={imageUrl} alt={meta.fileName || 'Image'} className="w-full rounded-xl transition-opacity duration-500" style={{ maxHeight: '360px', objectFit: 'cover' }} />
+        )}
+        {/* Loading state */}
+        {loading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-xl">
+            <Loader2 size={24} className="animate-spin text-white/60" />
+          </div>
+        )}
+        {/* Error state */}
+        {error && (
+          <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs flex items-center gap-2">
+            <AlertCircle size={14} /> Decryption failed
+          </div>
+        )}
+        {/* Hover overlay */}
+        {imageUrl && (
+          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors rounded-xl flex items-center justify-center">
+            <Maximize2 size={20} className="text-white opacity-0 group-hover:opacity-80 transition-opacity" />
+          </div>
+        )}
+        {/* File info */}
+        {meta.fileSize && (
+          <div className="absolute bottom-2 left-2 bg-black/60 backdrop-blur-sm rounded-md px-2 py-0.5 text-[9px] text-white/60 font-mono opacity-0 group-hover:opacity-100 transition-opacity">
+            {formatFileSize(meta.fileSize)}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return null;
+};
+
+/* ─── Lightbox (Glassmorphism Full-Screen Viewer) ─── */
+const Lightbox = ({ src, onClose }) => {
+  if (!src) return null;
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center animate-in fade-in duration-200" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/90 backdrop-blur-2xl" />
+      <div className="relative z-10 max-w-[90vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+        <img src={src} alt="Media" className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl object-contain" />
+        <div className="absolute -top-12 right-0 flex items-center gap-2">
+          <a href={src} download className="p-2.5 bg-white/10 backdrop-blur-md rounded-xl text-white/60 hover:text-white hover:bg-white/20 transition-all">
+            <Download size={18} />
+          </a>
+          <button onClick={onClose} className="p-2.5 bg-white/10 backdrop-blur-md rounded-xl text-white/60 hover:text-white hover:bg-white/20 transition-all">
+            <X size={18} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 /* ─── Shared Message Item ─── */
-const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextMenu, onReply, onEdit, onReact }) => {
+const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextMenu, onReply, onEdit, onReact, onViewProfile, profiles, chatKey, chatId, onLightbox, onEphemeralView }) => {
+  const profile = profiles?.[msg.senderId === me.id ? me.id : (msg.senderId || msg.sender_id)] || {};
+  const avatar_id = profile.avatar_id || (msg.senderId === me.id ? me.avatar_id : (msg.sender_avatar_id || 1));
+  const displayName = profile.display_name || profile.username || groupItem.senderUsername || 'Member';
   const isOwn = msg.senderId === me.id;
   const longPress = useLongPress((e) => {
     // Skip menu if they are long-pressing the actual message text (allow native select)
@@ -157,8 +527,11 @@ const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextM
       {replyBanner}
       <div className="flex gap-4 px-4 py-0.5">
         {isFirst ? (
-          <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold flex-shrink-0 mt-0.5 ${isOwn ? 'bg-indigo-600/20 text-indigo-400' : 'bg-white/[0.08] text-white/40'}`}>
-            {groupItem.senderUsername?.[0]?.toUpperCase() || '?'}
+          <div 
+            onClick={() => onViewProfile?.(msg.senderId || msg.sender_id)}
+            className={`w-10 h-10 bg-[#2b2d31] rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 cursor-pointer hover:shadow-[0_0_15px_rgba(99,102,241,0.2)] transition-all active:scale-95 ${isOwn ? 'text-indigo-400' : 'text-indigo-400/50'}`}
+          >
+            <CipherMascot className="w-full h-full p-2" id={avatar_id} />
           </div>
         ) : (
           <div className="w-10 flex-shrink-0 flex items-center justify-center">
@@ -169,19 +542,31 @@ const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextM
         <div className="flex-1 min-w-0">
           {isFirst && (
             <div className="flex items-baseline gap-2">
-              <span className={`font-semibold text-sm ${isOwn ? 'text-indigo-400' : 'text-white/90'}`}>{groupItem.senderUsername}</span>
+              <span 
+                onClick={() => onViewProfile?.(msg.senderId || msg.sender_id)}
+                className={`font-semibold text-sm cursor-pointer hover:underline transition-all ${isOwn ? 'text-indigo-400' : 'text-white/90'}`}
+              >
+                {displayName}
+              </span>
               <span className="text-[11px] text-white/20">{formatDiscordTime(groupItem.firstTime)}</span>
             </div>
           )}
           
-          <p className="msg-text-area text-[15px] text-white/[0.75] leading-[1.625] mt-0.5 select-text">
-            {isUnlocked && msg.plaintext ? msg.plaintext : (
-              <span className="font-mono text-[12.5px] text-white/20 break-all select-none opacity-60 tracking-tighter leading-relaxed italic">
-                {getGarbage(msg.ciphertext)}
-              </span>
-            )}
-            {msg.edited_at && <span className="text-[10px] text-white/30 ml-2">(edited)</span>}
-          </p>
+          {/* Media Content */}
+          {msg.type && msg.type !== 'text' ? (
+            <div className="mt-1">
+              <MediaMessageContent msg={msg} isUnlocked={isUnlocked} chatKey={chatKey} chatId={chatId} onLightbox={onLightbox} onEphemeralView={onEphemeralView} />
+            </div>
+          ) : (
+            <p className="msg-text-area text-[15px] text-white/[0.75] leading-[1.625] mt-0.5 select-text">
+              {isUnlocked && msg.plaintext ? msg.plaintext : (
+                <span className="font-mono text-[12.5px] text-white/20 break-all select-none opacity-60 tracking-tighter leading-relaxed italic">
+                  {getGarbage(msg.ciphertext)}
+                </span>
+              )}
+              {msg.edited_at && <span className="text-[10px] text-white/30 ml-2">(edited)</span>}
+            </p>
+          )}
 
           {msg.reactions && Object.keys(msg.reactions).length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1">
@@ -205,8 +590,8 @@ const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextM
   );
 };
 
-/* ─── DM Chat Panel ─── */
-const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
+/* ─── Chat Panel ─── */
+const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack, theme, onViewProfile, profiles }) => {
   const [rawMessages, setRawMessages] = useState([]);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -214,6 +599,10 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
   const [chatKey, setChatKey] = useState("");
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [showMediaPicker, setShowMediaPicker] = useState(false);
+  const [ephemeralMode, setEphemeralMode] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(null); // null | 'compressing' | 'encrypting' | 'uploading' | 'done'
+  const [lightboxSrc, setLightboxSrc] = useState(null);
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
   const isInitialScrollDone = useRef(false);
@@ -370,10 +759,39 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
         const now = Date.now();
         addMessage({ id: `local_${now}`, senderId: me.id, receiverId: AI_USER.id, ...payload, timestamp: now });
         setInput(""); setIsSending(false); inputRef.current?.focus();
+
         setTimeout(async () => {
-          const aiP = await encryptMessage({ plaintext: "AI relay active. Secure channel received.", passphrase: chatKey, chatId });
+          let aiText = "Cipher AI relay active. Secure channel established. (Provide VITE_GEMINI_API_KEY to enable real AI responses)";
+          const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+
+          if (apiKey) {
+            try {
+              const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  contents: [{ parts: [{ text: input.trim() }] }],
+                  system_instruction: { 
+                    parts: [{ text: "You are Cipher AI, the personal AI agent for the Cipher messaging application. You identify yourself as Cipher AI, operate internally using Gemini AI, and provide concise, helpful, and privacy-focused responses. Keep answers crisp and tactical to match the app's Cyber-Minimalist aesthetic." }]
+                  }
+                })
+              });
+              const data = await res.json();
+              if (data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+                aiText = data.candidates[0].content.parts[0].text;
+              } else {
+                console.error("Gemini AI Error:", data);
+                aiText = "Error: Cipher AI neural relay failed to interpret the query.";
+              }
+            } catch (err) {
+              console.error("Gemini fetch error:", err);
+              aiText = "Error: Cipher AI disconnected. Please check connection.";
+            }
+          }
+
+          const aiP = await encryptMessage({ plaintext: aiText, passphrase: chatKey, chatId });
           addMessage({ id: `local_${Date.now()}`, senderId: AI_USER.id, receiverId: me.id, ...aiP, timestamp: Date.now() });
-        }, 1000 + Math.random() * 1000);
+        }, 1000 + Math.random() * 500);
         return;
       }
 
@@ -439,18 +857,91 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
     }
   }, [isUnlocked, activeChat?.id]);
 
+  // ─── Media Handlers ───
+  const handleSendImage = async (file) => {
+    if (!isUnlocked || !chatKey || activeChat.isAI) return;
+    setIsSending(true);
+    try {
+      setUploadProgress('compressing');
+      const { encryptedBlob, metadata } = await processMediaForUpload(file, chatKey, chatId);
+      setUploadProgress('uploading');
+      const { path } = await api.uploadMedia(encryptedBlob, file.name);
+      setUploadProgress('done');
+      const payload = await encryptMessage({ plaintext: `[Image: ${file.name}]`, passphrase: chatKey, chatId });
+      const res = await api.sendMediaMessage(activeChat.id, payload, {
+        type: 'image',
+        media_url: path,
+        media_meta: metadata,
+        ephemeral: ephemeralMode
+      }, replyTo?.id);
+      addMessage(res.message);
+      setReplyTo(null);
+      setEphemeralMode(false);
+    } catch (err) {
+      console.error('[Media] Upload failed:', err);
+      alert('Upload failed: ' + (err.message || 'Unknown error'));
+    } finally {
+      setIsSending(false);
+      setUploadProgress(null);
+    }
+  };
 
+  const handleSendGif = async (gif) => {
+    if (!isUnlocked || !chatKey || activeChat.isAI) return;
+    setIsSending(true);
+    try {
+      const payload = await encryptMessage({ plaintext: `[GIF: ${gif.title}]`, passphrase: chatKey, chatId });
+      const res = await api.sendMediaMessage(activeChat.id, payload, {
+        type: 'gif',
+        media_url: gif.url,
+        media_meta: { width: gif.width, height: gif.height, title: gif.title }
+      }, replyTo?.id);
+      addMessage(res.message);
+      setReplyTo(null);
+    } catch (err) {
+      console.error('[Media] GIF send failed:', err);
+    } finally { setIsSending(false); }
+  };
 
-  const displayMessages = messages.map(m => ({ ...m, senderUsername: m.senderId === me.id ? me.username : activeChat.username }));
+  const handleSendSticker = async (sticker) => {
+    if (!isUnlocked || !chatKey || activeChat.isAI) return;
+    setIsSending(true);
+    try {
+      const payload = await encryptMessage({ plaintext: `[Sticker: ${sticker.name || sticker.title || sticker.emoji}]`, passphrase: chatKey, chatId });
+      const res = await api.sendMediaMessage(activeChat.id, payload, {
+        type: 'sticker',
+        media_url: sticker.url || null,
+        media_meta: sticker.emoji ? { emoji: sticker.emoji, name: sticker.name, url: sticker.url } : { title: sticker.title }
+      }, replyTo?.id);
+      addMessage(res.message);
+      setReplyTo(null);
+    } catch (err) {
+      console.error('[Media] Sticker send failed:', err);
+    } finally { setIsSending(false); }
+  };
+
+  const handleEphemeralView = async (msg) => {
+    try {
+      await api.markEphemeralViewed(msg.id, false);
+      if (msg.media_url && msg.type === 'image') {
+        setTimeout(() => api.deleteMedia(msg.media_url), 30000); // Delete after 30s viewing window
+      }
+    } catch (err) { console.error('[Media] Ephemeral marking failed:', err); }
+  };
+
+  const displayMessages = messages.map(m => {
+    const p = profiles[m.senderId] || (m.senderId === me.id ? me : (m.senderId === activeChat.id ? activeChat : {}));
+    return { ...m, senderUsername: p.display_name || p.username || 'Unknown' };
+  });
   const msgGroups = groupMessages(displayMessages);
 
   return (
     <div className="h-full flex flex-col relative mobile-view-transition">
       {/* Header */}
-      <div className="h-13 md:h-12 border-b border-white/[0.06] flex items-center px-3 md:px-4 gap-2 md:gap-3 flex-shrink-0 bg-[#0c0c0e] safe-top">
+      <div className={`h-13 md:h-12 border-b border-white/[0.06] flex items-center px-3 md:px-4 gap-2 md:gap-3 flex-shrink-0 safe-top ${theme === 'vibrant' ? 'bg-[#16161a]' : 'bg-[#0c0c0e]'}`}>
         <button onClick={onBack} className="md:hidden p-2.5 -ml-1 text-white/50 active:text-white active:bg-white/5 rounded-xl transition-colors"><ChevronLeft size={22} /></button>
         <AtSign size={18} className="text-white/30 hidden md:block" />
-        <span className="font-semibold text-[15px] text-white/90 truncate">{activeChat.username}</span>
+        <span className="font-semibold text-[15px] text-white/90 truncate">{(profiles[activeChat.id]?.display_name || profiles[activeChat.id]?.username) || activeChat.display_name || activeChat.username}</span>
         <div className="flex-1" />
         <div className="hidden sm:flex items-center gap-1.5 text-[10px] mr-2">
           <div className={`w-1.5 h-1.5 rounded-full ${isUnlocked ? 'bg-green-500' : 'bg-amber-500 animate-pulse'}`} />
@@ -463,11 +954,11 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto discord-scrollbar">
         <div className="px-4 pt-8 pb-4">
-          <div className={`w-20 h-20 rounded-full flex items-center justify-center mb-4 text-3xl font-bold ${activeChat.isAI ? 'bg-indigo-600/20 text-indigo-400' : 'bg-white/[0.08] text-white/40'}`}>
-            {activeChat.isAI ? <Sparkles size={36} /> : activeChat.username[0].toUpperCase()}
+          <div className={`w-20 h-20 rounded-full bg-[#2b2d31] flex items-center justify-center mb-4 text-3xl font-bold ${activeChat.isAI ? 'text-indigo-400' : 'text-indigo-400/50'}`}>
+            {activeChat.isAI ? <Sparkles size={36} /> : <CipherMascot className="w-full h-full p-4" />}
           </div>
-          <h2 className="text-xl font-bold text-white">{activeChat.username}</h2>
-          <p className="text-sm text-white/30 mt-1">This is the beginning of your direct message history with <strong className="text-white/50">@{activeChat.username}</strong>.</p>
+          <h2 className="text-xl font-bold text-white">{(profiles[activeChat.id]?.display_name || profiles[activeChat.id]?.username) || activeChat.display_name || activeChat.username}</h2>
+          <p className="text-sm text-white/30 mt-1">This is the beginning of your direct message history with <strong className="text-white/50">{(profiles[activeChat.id]?.display_name || profiles[activeChat.id]?.username) || activeChat.display_name || activeChat.username}</strong> (@{activeChat.username}).</p>
           {!isUnlocked && (
             <div className="mt-4 p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl space-y-3">
               <div className="flex items-center gap-2 text-amber-500 font-bold text-xs uppercase tracking-wider">
@@ -482,27 +973,37 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
         {msgGroups.map((g, gi) => (
           <React.Fragment key={`group-${g.messages[0].id}`}>
             {g.newDay && <div className="flex items-center gap-4 px-4 my-4"><div className="flex-1 h-px bg-white/[0.06]" /><span className="text-[11px] font-semibold text-white/30">{formatDateSeparator(g.firstTime)}</span><div className="flex-1 h-px bg-white/[0.06]" /></div>}
-            <SharedMessageItem key={g.messages[0].id} msg={g.messages[0]} isFirst={true} groupItem={g} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} />
+            <SharedMessageItem key={g.messages[0].id} msg={g.messages[0]} isFirst={true} groupItem={g} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} onViewProfile={onViewProfile} profiles={profiles} chatKey={chatKey} chatId={chatId} onLightbox={setLightboxSrc} onEphemeralView={handleEphemeralView} />
             {g.messages.slice(1).map(m => (
-              <SharedMessageItem key={m.id} msg={m} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} />
+              <SharedMessageItem key={m.id} msg={m} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} onViewProfile={onViewProfile} profiles={profiles} chatKey={chatKey} chatId={chatId} onLightbox={setLightboxSrc} onEphemeralView={handleEphemeralView} />
             ))}
           </React.Fragment>
         ))}
-        {typingUsers.length > 0 && (
-          <div className="px-4 py-2 flex items-center gap-2">
-            <div className="flex gap-1">
-              <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-              <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-              <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-            </div>
-            <span className="text-xs font-semibold text-white/40">{typingUsers.join(", ")} {typingUsers.length > 1 ? "are" : "is"} typing...</span>
-          </div>
-        )}
         <div className="h-6" />
       </div>
 
       {/* Input */}
-      <div className="px-3 md:px-4 pb-5 md:pb-6 pt-2 flex-shrink-0 safe-bottom">
+      <div className="px-3 md:px-4 pb-5 md:pb-6 pt-2 flex-shrink-0 safe-bottom relative">
+        {/* Typing Indicator */}
+        {typingUsers.length > 0 && (
+          <div className="absolute bottom-full left-0 mb-1 px-4 md:px-5 flex items-center gap-2 pointer-events-none animate-in fade-in slide-in-from-bottom-1 duration-200">
+            <div className="flex gap-1">
+              <span className="w-1 h-1 bg-white/30 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-1 h-1 bg-white/30 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-1 h-1 bg-white/30 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+            <span className="text-[10px] font-bold text-white/30 uppercase tracking-wider">{typingUsers.join(", ")} {typingUsers.length > 1 ? "are" : "is"} typing...</span>
+          </div>
+        )}
+        {/* Upload Progress */}
+        {uploadProgress && (
+          <div className="mb-2 bg-indigo-500/10 border border-indigo-500/20 rounded-xl px-4 py-2.5 flex items-center gap-3 text-xs text-indigo-300 animate-pulse">
+            <Loader2 size={14} className="animate-spin" />
+            <span className="font-semibold uppercase tracking-wider">
+              {uploadProgress === 'compressing' ? 'Compressing & Encrypting...' : uploadProgress === 'uploading' ? 'Uploading to Vault...' : 'Done!'}
+            </span>
+          </div>
+        )}
         {(replyTo || editingMsg) && (
           <div className="mb-2 bg-indigo-500/10 border border-indigo-500/20 rounded-t-xl px-4 py-2 flex items-center justify-between text-xs text-indigo-300">
             <div className="flex items-center gap-2 truncate">
@@ -512,8 +1013,24 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
             <button onClick={() => { setReplyTo(null); setEditingMsg(null); setInput(""); }} className="p-1 hover:bg-white/10 rounded-full"><X size={14} /></button>
           </div>
         )}
+        {/* Media Picker */}
+        {showMediaPicker && (
+          <MediaPicker
+            onSelectFile={handleSendImage}
+            onSelectGif={handleSendGif}
+            onSelectSticker={handleSendSticker}
+            onClose={() => setShowMediaPicker(false)}
+            ephemeral={ephemeralMode}
+            onToggleEphemeral={() => setEphemeralMode(!ephemeralMode)}
+          />
+        )}
         <form onSubmit={send} className={`bg-white/[0.04] rounded-xl px-3 md:px-4 flex items-center border ${replyTo || editingMsg ? 'border-t-0 rounded-t-none' : 'border-white/[0.06]'} focus-within:border-white/10 transition-colors`}>
           {!isUnlocked && <button type="button" onClick={() => setShowKey(true)} className="p-2.5 -ml-1 text-amber-500 active:text-amber-400"><Lock size={20} /></button>}
+          {isUnlocked && !activeChat.isAI && (
+            <button type="button" onClick={() => setShowMediaPicker(!showMediaPicker)} className={`p-2.5 -ml-1 transition-colors ${showMediaPicker ? 'text-indigo-400' : 'text-white/25 hover:text-white/50 active:text-indigo-400'}`}>
+              <Plus size={20} />
+            </button>
+          )}
           <input ref={inputRef} disabled={!isUnlocked || isSending} 
             autoComplete="off" name="q_search"
             data-lpignore="true" data-1p-ignore="true" data-form-type="other"
@@ -535,12 +1052,13 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
           onEdit={(msg) => { setEditingMsg(msg); setInput(msg.plaintext || ""); inputRef.current?.focus(); }}
         />
       )}
+      {lightboxSrc && <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
     </div>
   );
 };
 
 /* ─── Group Chat Panel ─── */
-const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
+const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup, theme, onViewProfile, profiles }) => {
   const [rawMessages, setRawMessages] = useState([]);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -552,6 +1070,10 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
   const [addableFriends, setAddableFriends] = useState([]);
   const [loadingFriends, setLoadingFriends] = useState(false);
   const [addingId, setAddingId] = useState("");
+  const [showMediaPicker, setShowMediaPicker] = useState(false);
+  const [ephemeralMode, setEphemeralMode] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(null);
+  const [lightboxSrc, setLightboxSrc] = useState(null);
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
   const isInitialScrollDone = useRef(false);
@@ -601,7 +1123,7 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
         timestamp: m.timestamp || m.created_at, 
         senderId, 
         reactions: m.reactions || {},
-        senderUsername: m.senderUsername || m.u?.username || (isMe ? me.username : cachedUsername) || 'Member'
+        senderUsername: m.senderUsername || (m.u?.display_name || m.u?.username) || (isMe ? (me?.display_name || me?.username) : cachedUsername) || 'Member'
       };
 
       // Update cache if we found a valid name
@@ -615,7 +1137,7 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
           formatted.replyTo = { 
             ciphertext: original.ciphertext, 
             iv: original.iv, 
-            senderUsername: original.senderUsername || original.u?.username || 'Member',
+            senderUsername: original.senderUsername || (original.u?.display_name || original.u?.username) || 'Member',
             plaintext: original.plaintext
           };
         }
@@ -662,6 +1184,67 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [isUnlocked, activeGroup?.id]);
+
+  // ─── Media Handlers ───
+  const handleSendImage = async (file) => {
+    if (!isUnlocked || !chatKey) return;
+    setIsSending(true);
+    try {
+      setUploadProgress('compressing');
+      const { encryptedBlob, metadata } = await processMediaForUpload(file, chatKey, chatId);
+      setUploadProgress('uploading');
+      const { path } = await api.uploadMedia(encryptedBlob, file.name);
+      setUploadProgress('done');
+      const payload = await encryptMessage({ plaintext: `[Image: ${file.name}]`, passphrase: chatKey, chatId });
+      const res = await api.sendGroupMediaMessage(activeGroup.id, payload, {
+        type: 'image', media_url: path, media_meta: metadata, ephemeral: ephemeralMode
+      }, replyTo?.id);
+      addMessage({ ...res.message, senderUsername: me.display_name || me.username });
+      setReplyTo(null); setEphemeralMode(false);
+    } catch (err) {
+      console.error('[Media] Group upload failed:', err);
+      alert('Upload failed: ' + (err.message || 'Unknown error'));
+    } finally { setIsSending(false); setUploadProgress(null); }
+  };
+
+  const handleSendGif = async (gif) => {
+    if (!isUnlocked || !chatKey) return;
+    setIsSending(true);
+    try {
+      const payload = await encryptMessage({ plaintext: `[GIF: ${gif.title}]`, passphrase: chatKey, chatId });
+      const res = await api.sendGroupMediaMessage(activeGroup.id, payload, {
+        type: 'gif', media_url: gif.url, media_meta: { width: gif.width, height: gif.height, title: gif.title }
+      }, replyTo?.id);
+      addMessage({ ...res.message, senderUsername: me.display_name || me.username });
+      setReplyTo(null);
+    } catch (err) { console.error('[Media] Group GIF failed:', err); }
+    finally { setIsSending(false); }
+  };
+
+  const handleSendSticker = async (sticker) => {
+    if (!isUnlocked || !chatKey) return;
+    setIsSending(true);
+    try {
+      const payload = await encryptMessage({ plaintext: `[Sticker: ${sticker.name || sticker.title || sticker.emoji}]`, passphrase: chatKey, chatId });
+      const res = await api.sendGroupMediaMessage(activeGroup.id, payload, {
+        type: 'sticker',
+        media_url: sticker.url || null,
+        media_meta: sticker.emoji ? { emoji: sticker.emoji, name: sticker.name, url: sticker.url } : { title: sticker.title }
+      }, replyTo?.id);
+      addMessage({ ...res.message, senderUsername: me.display_name || me.username });
+      setReplyTo(null);
+    } catch (err) { console.error('[Media] Group sticker failed:', err); }
+    finally { setIsSending(false); }
+  };
+
+  const handleEphemeralView = async (msg) => {
+    try {
+      await api.markEphemeralViewed(msg.id, true);
+      if (msg.media_url && msg.type === 'image') {
+        setTimeout(() => api.deleteMedia(msg.media_url), 30000);
+      }
+    } catch (err) { console.error('[Media] Ephemeral marking failed:', err); }
+  };
 
   useEffect(() => {
     sendTypingEvent(input.length > 0);
@@ -795,8 +1378,8 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
   const msgGroups = groupMessages(messages);
 
   return (
-    <div className="h-full flex flex-col relative">
-      <div className="h-12 border-b border-white/[0.06] flex items-center px-4 gap-3 flex-shrink-0 bg-[#0c0c0e]">
+    <div className="h-full flex flex-col relative transition-colors duration-300">
+      <div className={`h-12 border-b border-white/[0.06] flex items-center px-4 gap-3 flex-shrink-0 transition-colors ${theme === 'vibrant' ? 'bg-[#16161a]' : 'bg-[#0c0c0e]'}`}>
         <button onClick={onBack} className="md:hidden p-1 text-white/40 hover:text-white"><Menu size={20} /></button>
         <Hash size={18} className="text-white/30" />
         <span className="font-semibold text-[15px] text-white/90">{activeGroup.name}</span>
@@ -829,26 +1412,36 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
         {msgGroups.map((g, gi) => (
           <React.Fragment key={`group-${g.messages[0].id}`}>
             {g.newDay && <div className="flex items-center gap-4 px-4 my-4"><div className="flex-1 h-px bg-white/[0.06]" /><span className="text-[11px] font-semibold text-white/30">{formatDateSeparator(g.firstTime)}</span><div className="flex-1 h-px bg-white/[0.06]" /></div>}
-            <SharedMessageItem key={g.messages[0].id} msg={g.messages[0]} isFirst={true} groupItem={g} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} />
+            <SharedMessageItem key={g.messages[0].id} msg={g.messages[0]} isFirst={true} groupItem={g} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} onViewProfile={onViewProfile} profiles={profiles} chatKey={chatKey} chatId={chatId} onLightbox={setLightboxSrc} onEphemeralView={handleEphemeralView} />
             {g.messages.slice(1).map(m => (
-              <SharedMessageItem key={m.id} msg={m} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} />
+              <SharedMessageItem key={m.id} msg={m} me={me} isUnlocked={isUnlocked} onContextMenu={handleContextMenu} onReply={handleReply} onEdit={handleEdit} onReact={handleReact} onViewProfile={onViewProfile} profiles={profiles} chatKey={chatKey} chatId={chatId} onLightbox={setLightboxSrc} onEphemeralView={handleEphemeralView} />
             ))}
           </React.Fragment>
         ))}
-        {typingUsers.length > 0 && (
-          <div className="px-4 py-2 flex items-center gap-2">
-            <div className="flex gap-1">
-              <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-              <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-              <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-            </div>
-            <span className="text-xs font-semibold text-white/40">{typingUsers.join(", ")} {typingUsers.length > 1 ? "are" : "is"} typing...</span>
-          </div>
-        )}
         <div className="h-6" />
       </div>
 
-      <div className="px-3 md:px-4 pb-5 md:pb-6 pt-2 flex-shrink-0 safe-bottom">
+      <div className="px-3 md:px-4 pb-5 md:pb-6 pt-2 flex-shrink-0 safe-bottom relative">
+        {/* Typing Indicator */}
+        {typingUsers.length > 0 && (
+          <div className="absolute bottom-full left-0 mb-1 px-4 md:px-5 flex items-center gap-2 pointer-events-none animate-in fade-in slide-in-from-bottom-1 duration-200">
+            <div className="flex gap-1">
+              <span className="w-1 h-1 bg-white/30 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-1 h-1 bg-white/30 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-1 h-1 bg-white/30 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+            <span className="text-[10px] font-bold text-white/30 uppercase tracking-wider">{typingUsers.join(", ")} {typingUsers.length > 1 ? "are" : "is"} typing...</span>
+          </div>
+        )}
+        {/* Upload Progress */}
+        {uploadProgress && (
+          <div className="mb-2 bg-indigo-500/10 border border-indigo-500/20 rounded-xl px-4 py-2.5 flex items-center gap-3 text-xs text-indigo-300 animate-pulse">
+            <Loader2 size={14} className="animate-spin" />
+            <span className="font-semibold uppercase tracking-wider">
+              {uploadProgress === 'compressing' ? 'Compressing & Encrypting...' : uploadProgress === 'uploading' ? 'Uploading to Vault...' : 'Done!'}
+            </span>
+          </div>
+        )}
         {(replyTo || editingMsg) && (
           <div className="mb-2 bg-indigo-500/10 border border-indigo-500/20 rounded-t-xl px-4 py-2 flex items-center justify-between text-xs text-indigo-300">
             <div className="flex items-center gap-2 truncate">
@@ -858,8 +1451,24 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
             <button onClick={() => { setReplyTo(null); setEditingMsg(null); setInput(""); }} className="p-1 hover:bg-white/10 rounded-full"><X size={14} /></button>
           </div>
         )}
+        {/* Media Picker */}
+        {showMediaPicker && (
+          <MediaPicker 
+            onSelectFile={handleSendImage}
+            onSelectGif={handleSendGif}
+            onSelectSticker={handleSendSticker}
+            onClose={() => setShowMediaPicker(false)}
+            ephemeral={ephemeralMode}
+            onToggleEphemeral={() => setEphemeralMode(!ephemeralMode)}
+          />
+        )}
         <form onSubmit={send} className={`bg-white/[0.04] rounded-xl px-3 md:px-4 flex items-center border ${replyTo || editingMsg ? 'border-t-0 rounded-t-none' : 'border-white/[0.06]'} focus-within:border-white/10 transition-colors`}>
           {!isUnlocked && <button type="button" onClick={() => setShowKey(true)} className="p-2 -ml-1 text-amber-500"><Lock size={18} /></button>}
+          {isUnlocked && (
+            <button type="button" onClick={() => setShowMediaPicker(!showMediaPicker)} className={`p-2.5 -ml-1 transition-colors ${showMediaPicker ? 'text-indigo-400' : 'text-white/25 hover:text-white/50 active:text-indigo-400'}`}>
+              <Plus size={20} />
+            </button>
+          )}
           <input ref={inputRef} disabled={!isUnlocked || isSending} 
             autoComplete="off" name="q_group_search"
             data-lpignore="true" data-1p-ignore="true" data-form-type="other"
@@ -871,6 +1480,44 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
           </button>}
         </form>
       </div>
+      {showAddFriend && (
+        <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-[#1e1f22] rounded-xl overflow-hidden shadow-2xl border border-white/5">
+            <div className="p-4 border-b border-white/5 flex items-center justify-between">
+              <h3 className="text-white font-bold">Add to Group</h3>
+              <button onClick={() => setShowAddFriend(false)} className="text-white/40 hover:text-white"><X size={20} /></button>
+            </div>
+            <div className="p-4 max-h-[400px] overflow-y-auto discord-scrollbar">
+              {loadingFriends ? (
+                <div className="flex justify-center py-8"><Loader2 className="animate-spin text-indigo-400" /></div>
+              ) : addableFriends.length > 0 ? (
+                <div className="space-y-2">
+                  {addableFriends.map(f => (
+                    <div key={f.id} className="flex items-center justify-between p-2 rounded-lg hover:bg-white/5">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-[#2b2d31] flex items-center justify-center text-[10px] font-bold text-indigo-400/50">
+                          <CipherMascot id={f.avatar_id} className="w-full h-full p-1.5" />
+                        </div>
+                        <span className="text-sm text-white/80 font-medium">{f.display_name || f.username}</span>
+                      </div>
+                      <button 
+                        onClick={() => addFriend(f.id)}
+                        disabled={addingId === f.id}
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-md transition-colors disabled:opacity-50"
+                      >
+                        {addingId === f.id ? <Loader2 size={14} className="animate-spin" /> : "Invite"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-center py-8 text-white/20 text-sm">No friends to invite</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {lightboxSrc && <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
       {showKey && <KeyModal title="Group Key" onClose={() => setShowKey(false)} onSubmit={(k) => { setChatKey(k); setIsUnlocked(true); setShowKey(false); }} />}
       {contextMenu && (
         <MessageContextMenu 
@@ -891,10 +1538,11 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
             {loadingFriends ? <div className="py-8 text-center text-white/20 text-sm flex items-center justify-center gap-2"><Loader2 size={16} className="animate-spin" /> Loading...</div>
             : addableFriends.length ? <div className="space-y-2 max-h-60 overflow-y-auto">{addableFriends.map(f => (
               <div key={f.id} className="flex items-center justify-between p-3 rounded-lg bg-white/[0.03] hover:bg-white/[0.05]">
-                <span className="text-sm text-white/80">@{f.username}</span>
+                <span className="text-sm text-white/80 cursor-pointer hover:underline" onClick={() => onViewProfile(f.id)}>@{f.username}</span>
                 <button onClick={() => addFriend(f.id)} disabled={addingId === f.id} className="px-3 py-1 bg-indigo-600/20 text-indigo-400 rounded text-xs font-bold hover:bg-indigo-600 hover:text-white transition-colors disabled:opacity-50">{addingId === f.id ? "..." : "Invite"}</button>
               </div>
             ))}</div>
+            : <div className="py-8 text-center text-white/20 text-sm">No friends to invite</div>}
             : <div className="py-8 text-center text-white/20 text-sm">No friends to invite</div>}
           </div>
         </div>
@@ -930,18 +1578,98 @@ const App = () => {
   const [friendsTab, setFriendsTab] = useState("all");
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(true);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [profileForm, setProfileForm] = useState(null);
+  const [selectedUserForProfile, setSelectedUserForProfile] = useState(null);
+
+  // Centralized identity registry for real-time consistency
+  const [profiles, setProfiles] = useState({});
+
+  const updateProfiles = useCallback((newUsers) => {
+    if (!newUsers || !Array.isArray(newUsers)) return;
+    setProfiles(prev => {
+      const next = { ...prev };
+      let changed = false;
+      newUsers.forEach(u => {
+        if (!u || !u.id) return;
+        const current = next[u.id];
+        // Deep compare or simple existence check
+        if (!current || 
+            current.username !== u.username || 
+            current.display_name !== u.display_name || 
+            current.avatar_id !== u.avatar_id || 
+            current.bio !== u.bio || 
+            current.status !== u.status) {
+          next[u.id] = { ...current, ...u };
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (showSettingsModal && me && !profileForm) {
+      setProfileForm({
+        display_name: me.display_name || "",
+        bio: me.bio || "",
+        avatar_id: me.avatar_id || 1,
+        banner_color: me.banner_color || "#4f46e5"
+      });
+    }
+  }, [showSettingsModal, me, profileForm]);
+
+  const isProfileDirty = profileForm && me && (
+    profileForm.display_name !== (me.display_name||"") ||
+    profileForm.bio !== (me.bio||"") ||
+    profileForm.avatar_id !== (me.avatar_id||1) ||
+    profileForm.banner_color !== (me.banner_color||"#4f46e5")
+  );
   const [notificationPrefs, setNotificationPrefs] = useState(() => {
-    try { return { ...DEFAULT_NOTIFICATION_PREFS, ...JSON.parse(localStorage.getItem(NOTIFICATION_PREFS_KEY)) }; } catch { return DEFAULT_NOTIFICATION_PREFS; }
+    const saved = localStorage.getItem(NOTIFICATION_PREFS_KEY);
+    return saved ? JSON.parse(saved) : DEFAULT_NOTIFICATION_PREFS;
   });
+  const [theme, setTheme] = useState(() => localStorage.getItem("cipher_theme") || "classical");
+  const [activeSettingsTab, setActiveSettingsTab] = useState("profiles");
+  const [settingsMobileView, setSettingsMobileView] = useState("nav");
+  const [showStatusMenu, setShowStatusMenu] = useState(false);
+  const statusMenuRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (statusMenuRef.current && !statusMenuRef.current.contains(e.target)) {
+        setShowStatusMenu(false);
+      }
+    };
+    if (showStatusMenu) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showStatusMenu]);
 
   const onlineUsers = usePresence(me);
 
   const loadNetwork = async (search = "") => {
     const [usersRes, friendsRes, requestsRes, myGroupsRes] = await Promise.allSettled([api.users(search), api.friends(), api.friendRequests(), api.myGroups()]);
-    if (usersRes.status === "fulfilled") setUsers(usersRes.value.users || []);
-    if (friendsRes.status === "fulfilled") setFriends([AI_USER, ...(friendsRes.value.friends || [])]);
-    if (requestsRes.status === "fulfilled") { setIncomingRequests(requestsRes.value.incoming || []); setOutgoingRequests(requestsRes.value.outgoing || []); }
+    
+    // Seed profiles registry
+    const allEncountered = [];
+    if (usersRes.status === "fulfilled") {
+      setUsers(usersRes.value.users || []);
+      allEncountered.push(...(usersRes.value.users || []));
+    }
+    if (friendsRes.status === "fulfilled") {
+      setFriends([AI_USER, ...(friendsRes.value.friends || [])]);
+      allEncountered.push(...(friendsRes.value.friends || []));
+    }
+    if (requestsRes.status === "fulfilled") {
+      setIncomingRequests(requestsRes.value.incoming || []);
+      setOutgoingRequests(requestsRes.value.outgoing || []);
+      allEncountered.push(...(requestsRes.value.incoming || []).map(r => ({ id: r.fromUserId, username: r.username, display_name: r.display_name, avatar_id: r.avatar_id })));
+      allEncountered.push(...(requestsRes.value.outgoing || []).map(r => ({ id: r.toUserId, username: r.username, display_name: r.display_name, avatar_id: r.avatar_id })));
+    }
     if (myGroupsRes.status === "fulfilled") setMyGroups(myGroupsRes.value.groups || []);
+
+    if (allEncountered.length > 0) updateProfiles(allEncountered);
   };
 
   useEffect(() => {
@@ -965,8 +1693,65 @@ const App = () => {
   useTableListener('friend_requests', 'from_user_id', me?.id, refresh);
   useTableListener('friend_requests', 'to_user_id', me?.id, refresh);
   useTableListener('group_members', 'user_id', me?.id, refresh);
+
+  // Global Tactical Identity Sync
+  useEffect(() => {
+    if (view !== 'main' || !me?.id) return;
+
+    const channel = supabase.channel('identity_sync')
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'users' },
+        (payload) => {
+          console.log("[Presence] Tactical identity update detected:", payload.new.id);
+          updateProfiles([payload.new]);
+          if (payload.new.id === me?.id) {
+            setMe(p => ({ ...p, ...payload.new }));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [view, me?.id, updateProfiles]);
   
-  useEffect(() => { try { localStorage.setItem(NOTIFICATION_PREFS_KEY, JSON.stringify(notificationPrefs)); } catch {} }, [notificationPrefs]);
+  useEffect(() => {
+    localStorage.setItem(NOTIFICATION_PREFS_KEY, JSON.stringify(notificationPrefs));
+  }, [notificationPrefs]);
+
+  useEffect(() => {
+    localStorage.setItem("cipher_theme", theme);
+    // Update browser theme-color meta tag
+    const metaTheme = document.querySelector('meta[name="theme-color"]');
+    if (metaTheme) metaTheme.setAttribute('content', theme === 'vibrant' ? '#111114' : '#0a0a0c');
+  }, [theme]);
+
+  const handleUpdateProfile = async (updates) => {
+    try {
+      const { error } = await supabase.from('users').update(updates).eq('id', me.id);
+      if (error) throw error;
+      setMe(p => ({ ...p, ...updates }));
+      return { success: true };
+    } catch (err) {
+      console.error("[Settings] Profile update failed:", err);
+      return { success: false, error: err.message };
+    }
+  };
+
+  const handleUpdatePassword = async (oldPassword, newPassword) => {
+    try {
+      // Supabase updateUser with password requires being logged in.
+      // Note: verify old password if you want, but auth.updateUser handles the rotation.
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+      return { success: true };
+    } catch (err) {
+      console.error("[Settings] Password update failed:", err);
+      return { success: false, error: err.message };
+    }
+  };
 
   const handleAuth = async (e) => {
     e.preventDefault(); setAuthError(""); setIsProcessing(true);
@@ -976,6 +1761,23 @@ const App = () => {
   };
 
   const onLogout = async () => { try { await api.logout(); } catch {} setView("auth"); setMe(null); setActiveChat(null); setActiveGroup(null); setUsers([]); setFriends([]); setIncomingRequests([]); setOutgoingRequests([]); setMyGroups([]); setPassword(""); };
+  const handleViewProfile = async (userId) => {
+    if (!userId) return;
+    if (userId === AI_USER.id) { setSelectedUserForProfile(AI_USER); return; }
+    
+    // Check global profile registry first
+    const cached = profiles[userId];
+    if (cached) { setSelectedUserForProfile(cached); return; }
+
+    try {
+      const { data, error } = await supabase.from('users').select('*').eq('id', userId).single();
+      if (!error && data) {
+        updateProfiles([data]);
+        setSelectedUserForProfile(data);
+      }
+    } catch {}
+  };
+
   const sendFriendReq = async (id) => {
     // Optimistic: immediately show as outgoing
     const target = users.find(u => u.id === id);
@@ -1044,9 +1846,10 @@ const App = () => {
 
   /* ─── MAIN LAYOUT ─── */
   return (
-    <div onContextMenu={(e) => { if (e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") e.preventDefault(); }} className="h-[100dvh] bg-[#0a0a0c] text-white flex font-['Inter',system-ui,sans-serif] overflow-hidden">
+    <div onContextMenu={(e) => { if (e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") e.preventDefault(); }} 
+      className={`h-[100dvh] flex font-['Inter',system-ui,sans-serif] overflow-hidden transition-colors duration-300 ${theme === 'vibrant' ? 'bg-[#111114] text-white' : 'bg-[#0a0a0c] text-white'}`}>
       {/* ─── Sidebar ─── */}
-      <aside className={`${mobileSidebarOpen ? 'flex' : 'hidden'} md:flex flex-col w-full md:w-[272px] bg-[#0c0c0e] border-r border-white/[0.06] flex-shrink-0 mobile-view-transition safe-top`}>
+      <aside className={`${mobileSidebarOpen ? 'flex' : 'hidden'} md:flex flex-col w-full md:w-[272px] flex-shrink-0 mobile-view-transition safe-top border-r transition-colors duration-300 ${theme === 'vibrant' ? 'bg-[#16161a] border-white/[0.08]' : 'bg-[#0c0c0e] border-white/[0.06]'}`}>
         {/* Search & Friends Top Bar */}
         <div className="px-3 py-3 pb-2 flex items-center gap-2.5">
           <div className="flex-1 min-w-0 flex items-center gap-2 bg-white/[0.03] border border-white/[0.06] rounded-xl px-2.5 py-[6px] focus-within:bg-white/[0.05] focus-within:border-indigo-500/30 transition-all">
@@ -1071,21 +1874,30 @@ const App = () => {
         <div className="flex-1 overflow-y-auto discord-scrollbar px-2 space-y-0.5">
           {/* DMs */}
           <div className="flex items-center justify-between px-2 pt-3 pb-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-white/20">Direct Messages</span>
+            <span className={`text-[11px] font-semibold uppercase tracking-wide transition-colors ${theme === 'vibrant' ? 'text-white/40' : 'text-white/20'}`}>Direct Messages</span>
           </div>
           {filteredFriends.map(f => (
-            <button key={f.id} onClick={() => { setActiveChat(f); setActiveGroup(null); setMobileSidebarOpen(false); }}
-              className={`w-full flex items-center gap-3 px-2.5 py-2 md:py-1.5 rounded-lg transition-colors active:scale-[0.98] ${activeChat?.id === f.id ? 'bg-white/[0.06] text-white' : 'text-white/40 active:bg-white/[0.04]'}`}>
-              <div className="relative">
-                <div className={`w-9 md:w-8 h-9 md:h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${f.isAI ? 'bg-indigo-600/25 text-indigo-400' : 'bg-white/[0.06] text-white/40'}`}>
-                  {f.isAI ? <Sparkles size={14} /> : f.username[0].toUpperCase()}
+            <div key={f.id} className="relative group">
+              <button onClick={() => { setActiveChat(f); setActiveGroup(null); setMobileSidebarOpen(false); }}
+                className={`w-full flex items-center gap-3 px-2.5 py-2 md:py-1.5 rounded-lg transition-colors active:scale-[0.98] ${activeChat?.id === f.id ? 'bg-white/[0.06] text-white' : 'text-white/40 active:bg-white/[0.04]'}`}>
+                <div 
+                  onClick={(e) => { e.stopPropagation(); handleViewProfile(f.id); }}
+                  className="relative w-9 md:w-8 h-9 md:h-8 flex-shrink-0 cursor-pointer hover:shadow-[0_0_10px_rgba(99,102,241,0.2)] transition-all"
+                >
+                  <div className={`w-full h-full rounded-full flex items-center justify-center text-xs font-bold ${f.isAI ? 'bg-indigo-600/25 text-indigo-400' : 'bg-[#2b2d31] text-indigo-400/50'}`}>
+                    {f.isAI ? <Sparkles size={14} /> : <CipherMascot className="w-full h-full p-2" id={profiles[f.id]?.avatar_id || f.avatar_id} />}
+                  </div>
+                  {!f.isAI && (
+                    <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-[#121215] transition-colors ${
+                      !onlineUsers.has(f.id) || profiles[f.id]?.status === 'invisible' ? 'bg-white/20' : 
+                      profiles[f.id]?.status === 'idle' ? 'bg-[#f0b232]' : 
+                      profiles[f.id]?.status === 'dnd' ? 'bg-[#f23f43]' : 'bg-[#23a55a]'
+                    }`} />
+                  )}
                 </div>
-                {!f.isAI && (
-                  <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-[#121215] transition-colors ${onlineUsers.has(f.id) ? 'bg-green-500' : 'bg-white/20'}`} />
-                )}
-              </div>
-              <span className="text-[14px] md:text-[13px] truncate">{f.username}</span>
-            </button>
+                <span className="text-[14px] md:text-[13px] truncate">{profiles[f.id]?.display_name || f.display_name || f.username}</span>
+              </button>
+            </div>
           ))}
 
           {/* Groups */}
@@ -1119,18 +1931,56 @@ const App = () => {
         </div>
 
         {/* User panel */}
-        <div className="p-2 border-t border-white/[0.06] bg-black/30 safe-bottom">
+        <div className={`p-2 border-t border-white/[0.06] safe-bottom transition-colors relative ${theme === 'vibrant' ? 'bg-white/[0.02]' : 'bg-black/30'}`}>
+          {/* Status Selection Menu */}
+          {showStatusMenu && (
+            <div ref={statusMenuRef} className="absolute bottom-[110%] left-2 right-2 bg-[#111214] border border-white/10 rounded-xl shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
+              {[
+                { id: 'online', label: 'Online', color: 'bg-[#23a55a]', text: 'ACTIVE' },
+                { id: 'idle', label: 'Idle', color: 'bg-[#f0b232]', text: 'PASSIVE' },
+                { id: 'dnd', label: 'Do Not Disturb', color: 'bg-[#f23f43]', text: 'STANDBY' },
+                { id: 'invisible', label: 'Invisible', color: 'bg-[#80848e]', text: 'INVISIBLE' }
+              ].map(s => (
+                <button
+                  key={s.id}
+                  onClick={() => {
+                    handleUpdateProfile({ status: s.id });
+                    setShowStatusMenu(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-3 py-2 hover:bg-white/5 rounded-lg transition-colors group"
+                >
+                  <div className={`w-2.5 h-2.5 rounded-full ${s.color}`} />
+                  <span className="text-[11px] font-bold text-white/50 group-hover:text-white transition-colors uppercase tracking-wider">{s.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="flex items-center justify-between px-2 py-2 md:py-1.5">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-9 md:w-8 h-9 md:h-8 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm font-bold text-indigo-400 flex-shrink-0">{me?.username?.[0]?.toUpperCase() || '?'}</div>
+            <div 
+              className="flex items-center gap-2.5 min-w-0 cursor-pointer group/profile"
+              onClick={() => setShowStatusMenu(true)}
+            >
+              <div className="relative w-9 md:w-8 h-9 md:h-8 flex-shrink-0">
+                <div className="w-full h-full bg-[#2b2d31] rounded-full flex items-center justify-center transition-transform group-hover/profile:scale-105 active:scale-95">
+                  <CipherMascot className="w-full h-full p-1.5 text-indigo-400" id={me?.avatar_id} />
+                </div>
+                <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-[#1a1a1e] ${
+                  me?.status === 'online' ? 'bg-[#23a55a]' : 
+                  me?.status === 'idle' ? 'bg-[#f0b232]' : 
+                  me?.status === 'dnd' ? 'bg-[#f23f43]' : 'bg-[#80848e]'
+                }`} />
+              </div>
               <div className="min-w-0">
-                <p className="text-[14px] md:text-[13px] font-medium text-white/80 truncate">{me?.username}</p>
-                <p className="text-[11px] text-green-500/60 flex items-center gap-1"><span className="w-1.5 h-1.5 bg-green-500 rounded-full" />Online</p>
+                <p className="text-[14px] md:text-[13px] font-bold text-white/90 truncate uppercase tracking-tight">@{me?.username}</p>
+                <p className="text-[10px] text-white/40 flex items-center leading-none pt-0.5 uppercase font-black tracking-widest">
+                  {me?.status === 'online' ? 'ACTIVE' : me?.status === 'idle' ? 'PASSIVE' : me?.status === 'dnd' ? 'STANDBY' : 'INVISIBLE'}
+                </p>
               </div>
             </div>
             <div className="flex items-center gap-1">
-              <button onClick={() => setShowSettingsModal(true)} className="p-2.5 text-white/20 active:text-white/50 rounded-xl active:bg-white/5 transition-colors"><SettingsIcon size={18} /></button>
-              <button onClick={onLogout} className="p-2.5 text-white/20 active:text-red-400 rounded-xl active:bg-red-500/10 transition-colors"><LogOut size={18} /></button>
+              <button onClick={() => setShowSettingsModal(true)} className="p-2.5 text-white/20 hover:text-white/60 rounded-xl hover:bg-white/5 transition-all"><SettingsIcon size={18} /></button>
+              <button onClick={onLogout} className="p-2.5 text-white/20 hover:text-red-400 rounded-xl hover:bg-red-500/10 transition-all"><LogOut size={18} /></button>
             </div>
           </div>
         </div>
@@ -1139,13 +1989,13 @@ const App = () => {
       {/* ─── Main Content ─── */}
       <main className={`${mobileSidebarOpen && (activeChat || activeGroup) ? 'hidden md:flex' : mobileSidebarOpen ? 'hidden md:flex' : 'flex'} md:flex flex-col flex-1 min-w-0`}>
         {activeChat ? (
-          <ChatPanel activeChat={activeChat} me={me} onRemoveFriend={removeFriend} onBack={() => setMobileSidebarOpen(true)} />
+          <ChatPanel activeChat={activeChat} me={me} onRemoveFriend={removeFriend} onBack={() => setMobileSidebarOpen(true)} theme={theme} onViewProfile={handleViewProfile} profiles={profiles} />
         ) : activeGroup ? (
-          <GroupChatPanel activeGroup={activeGroup} me={me} onBack={() => setMobileSidebarOpen(true)} onExitGroup={leaveGroup} />
+          <GroupChatPanel activeGroup={activeGroup} me={me} onBack={() => setMobileSidebarOpen(true)} onExitGroup={leaveGroup} theme={theme} onViewProfile={handleViewProfile} profiles={profiles} />
         ) : (
           /* ─── Friends View ─── */
           <div className="h-full flex flex-col">
-            <div className="h-13 md:h-12 border-b border-white/[0.06] flex items-center px-3 md:px-4 gap-3 flex-shrink-0 bg-[#0c0c0e] safe-top md:bg-transparent">
+            <div className={`h-13 md:h-12 border-b border-white/[0.06] flex items-center px-3 md:px-4 gap-3 flex-shrink-0 safe-top transition-colors ${theme === 'vibrant' ? 'bg-[#16161a]' : 'bg-[#0c0c0e] md:bg-transparent'}`}>
               <button onClick={() => setMobileSidebarOpen(true)} className="md:hidden p-2 -ml-1 text-white/50 active:bg-white/5 rounded-xl transition-colors"><Menu size={22} /></button>
               <GroupsIcon size={20} className="text-white/30 hidden md:block" />
               <span className="font-semibold text-[15px] text-white/90 mr-2 md:mr-0">Friends</span>
@@ -1176,11 +2026,23 @@ const App = () => {
                   {friends.filter(f => !f.isAI).map(f => (
                     <div key={f.id} className="flex items-center justify-between p-2.5 rounded-lg hover:bg-white/[0.03] group border-t border-white/[0.04]">
                       <div className="flex items-center gap-3">
-                        <div className="relative">
-                          <div className="w-9 h-9 rounded-full bg-white/[0.06] flex items-center justify-center text-sm font-bold text-white/40">{f.username[0].toUpperCase()}</div>
-                          <div className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-[#0a0a0c] transition-colors ${onlineUsers.has(f.id) ? 'bg-green-500' : 'bg-white/20'}`} />
+                        <div 
+                          onClick={() => handleViewProfile(f.id)}
+                          className="relative cursor-pointer hover:shadow-[0_0_10px_rgba(99,102,241,0.2)] transition-all"
+                        >
+                          <div className="w-9 h-9 flex items-center justify-center text-sm font-bold bg-[#2b2d31] rounded-full text-indigo-400/50">
+                            <CipherMascot className="w-full h-full p-2" id={profiles[f.id]?.avatar_id || f.avatar_id} />
+                          </div>
+                          <div className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-[#0a0a0c] transition-colors ${
+                            !onlineUsers.has(f.id) || profiles[f.id]?.status === 'invisible' ? 'bg-white/20' : 
+                            profiles[f.id]?.status === 'idle' ? 'bg-[#f0b232]' : 
+                            profiles[f.id]?.status === 'dnd' ? 'bg-[#f23f43]' : 'bg-[#23a55a]'
+                          }`} />
                         </div>
-                        <span className="text-[14px] font-medium text-white/80">{f.username}</span>
+                        <div className="flex flex-col cursor-pointer hover:underline" onClick={() => handleViewProfile(f.id)}>
+                          <span className="text-[14px] font-medium text-white/80">{profiles[f.id]?.display_name || f.display_name || f.username}</span>
+                          <span className="text-[10px] text-white/20">@{f.username}</span>
+                        </div>
                       </div>
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button onClick={() => { setActiveChat(f); setMobileSidebarOpen(false); }} className="p-2 rounded-full bg-white/[0.06] text-white/40 hover:text-white transition-colors"><MessageSquare size={16} /></button>
@@ -1198,8 +2060,16 @@ const App = () => {
                     {incomingRequests.map(r => (
                       <div key={r.fromUserId} className="flex items-center justify-between p-2.5 rounded-lg hover:bg-white/[0.03] border-t border-white/[0.04]">
                         <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-full bg-amber-500/10 flex items-center justify-center text-sm font-bold text-amber-400">{r.username[0].toUpperCase()}</div>
-                          <div><p className="text-[14px] font-medium text-white/80">{r.username}</p><p className="text-[10px] text-amber-500/50">Incoming Request</p></div>
+                          <div 
+                            onClick={() => handleViewProfile(r.fromUserId)}
+                            className="w-9 h-9 flex items-center justify-center text-sm font-bold bg-[#2b2d31] rounded-full text-amber-500/50 cursor-pointer hover:shadow-[0_0_10px_rgba(99,102,241,0.2)] transition-all"
+                          >
+                            <CipherMascot className="w-full h-full p-2" id={r.u?.avatar_id} />
+                          </div>
+                          <div className="cursor-pointer hover:underline" onClick={() => handleViewProfile(r.fromUserId)}>
+                            <p className="text-[14px] font-medium text-white/80 leading-tight">{r.display_name || r.username}</p>
+                            <p className="text-[10px] text-amber-500/50">Incoming Request • @{r.username}</p>
+                          </div>
                         </div>
                         <div className="flex gap-1.5">
                           <button onClick={() => acceptFriendReq(r.fromUserId)} className="px-3 py-1.5 bg-green-600/20 text-green-400 rounded-md text-xs font-bold hover:bg-green-600 hover:text-white transition-colors">Accept</button>
@@ -1213,8 +2083,16 @@ const App = () => {
                     {outgoingRequests.map(r => (
                       <div key={r.toUserId} className="flex items-center justify-between p-2.5 rounded-lg hover:bg-white/[0.03] border-t border-white/[0.04]">
                         <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-full bg-white/[0.06] flex items-center justify-center text-sm font-bold text-white/40">{r.username[0].toUpperCase()}</div>
-                          <div><p className="text-[14px] font-medium text-white/80">{r.username}</p><p className="text-[10px] text-indigo-400/50">Pending</p></div>
+                          <div 
+                            onClick={() => handleViewProfile(r.toUserId)}
+                            className="w-9 h-9 flex items-center justify-center text-sm font-bold bg-[#2b2d31] rounded-full text-indigo-400/50 cursor-pointer hover:shadow-[0_0_10px_rgba(99,102,241,0.2)] transition-all"
+                          >
+                            <CipherMascot className="w-full h-full p-2" id={r.u?.avatar_id} />
+                          </div>
+                          <div className="cursor-pointer hover:underline" onClick={() => handleViewProfile(r.toUserId)}>
+                            <p className="text-[14px] font-medium text-white/80">{r.username}</p>
+                            <p className="text-[10px] text-indigo-400/50">Pending</p>
+                          </div>
                         </div>
                         <button onClick={() => unsendFriendReq(r.toUserId)} className="px-3 py-1.5 bg-red-500/10 text-red-400 rounded-md text-xs font-bold hover:bg-red-500 hover:text-white transition-colors">Cancel</button>
                       </div>
@@ -1236,8 +2114,16 @@ const App = () => {
                   {discoveredUsers.map(u => (
                     <div key={u.id} className="flex items-center justify-between p-2.5 rounded-lg hover:bg-white/[0.03] border-t border-white/[0.04]">
                       <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-white/[0.06] flex items-center justify-center text-sm font-bold text-white/40">{u.username[0].toUpperCase()}</div>
-                        <span className="text-[14px] font-medium text-white/80">{u.username}</span>
+                        <div 
+                          onClick={() => handleViewProfile(u.id)}
+                          className="w-9 h-9 flex items-center justify-center text-sm font-bold bg-[#2b2d31] rounded-full text-indigo-400/50 cursor-pointer hover:shadow-[0_0_10px_rgba(99,102,241,0.2)] transition-all"
+                        >
+                          <CipherMascot className="w-full h-full p-2" id={u.avatar_id} />
+                        </div>
+                        <div onClick={() => handleViewProfile(u.id)} className="cursor-pointer hover:underline">
+                          <p className="text-[14px] font-medium text-white/80 leading-tight">{u.display_name || u.username}</p>
+                          <p className="text-[11px] text-white/20">@{u.username}</p>
+                        </div>
                       </div>
                       <button onClick={() => sendFriendReq(u.id)} className="px-3 py-1.5 bg-indigo-600/20 text-indigo-400 rounded-md text-xs font-bold hover:bg-indigo-600 hover:text-white transition-colors">Send Request</button>
                     </div>
@@ -1250,46 +2136,468 @@ const App = () => {
         )}
       </main>
 
-      {/* ─── Settings Modal ─── */}
+      {/* ─── Settings Modal (Discord Style) ─── */}
       {showSettingsModal && (
-        <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-xl flex items-center justify-center p-6">
-          <div className="bg-[#1a1a1e] border border-white/10 p-8 rounded-2xl w-full max-w-md space-y-6 shadow-2xl">
-            <div className="flex items-center justify-between">
-              <div><h3 className="text-xs font-bold uppercase tracking-widest text-white/40">Settings</h3><p className="text-lg font-bold text-white mt-1">Preferences</p></div>
-              <button onClick={() => setShowSettingsModal(false)} className="p-2 text-white/20 hover:text-white transition-colors"><X size={18} /></button>
-            </div>
-            <div className="space-y-2">
-              <h4 className="text-[10px] font-bold uppercase tracking-wider text-indigo-400/50 flex items-center gap-2 px-1"><Bell size={12} /> Notifications</h4>
-              {[{ key: "messages", label: "Messages" }, { key: "friendRequests", label: "Friend Requests" }, { key: "groupRequests", label: "Group Requests" }, { key: "sounds", label: "Sounds" }].map(r => (
-                <button key={r.key} onClick={() => setNotificationPrefs(p => ({ ...p, [r.key]: !p[r.key] }))}
-                  className="w-full bg-white/[0.03] rounded-lg px-4 py-3 flex items-center justify-between hover:bg-white/[0.05] transition-colors">
-                  <span className="text-sm text-white/70">{r.label}</span>
-                  <div className={`w-9 h-5 rounded-full transition-colors relative p-0.5 ${notificationPrefs[r.key] ? 'bg-indigo-600' : 'bg-white/10'}`}>
-                    <div className={`w-4 h-4 bg-white rounded-full transition-transform ${notificationPrefs[r.key] ? 'translate-x-4' : ''}`} />
-                  </div>
-                </button>
-              ))}
-            </div>
-            <div className="bg-white/[0.03] rounded-lg p-4 space-y-2">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-medium text-white/70">Cipher Secure</p>
-                <span className="text-[10px] font-bold text-green-500 bg-green-500/10 px-2 py-0.5 rounded">Live</span>
+        <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-md flex items-center justify-center md:p-6 animate-in fade-in duration-300">
+          <div className={`w-full h-full md:h-[80vh] md:max-w-5xl flex flex-col md:flex-row transition-all duration-300 md:rounded-2xl md:border md:shadow-2xl overflow-hidden ${theme === 'vibrant' ? 'bg-[#111114] border-white/10' : 'bg-[#0a0a0c] border-white/5'}`}>
+            
+            {/* Sidebar (Mobile: only shown if view is 'nav') */}
+            <aside className={`${settingsMobileView === 'nav' ? 'flex' : 'hidden'} md:flex flex-col w-full md:w-64 bg-white/[0.02] border-r border-white/[0.05] flex-shrink-0 safe-top`}>
+              <div className="p-6 pb-2 flex items-center justify-between md:block">
+                <div>
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-white/30">User Settings</h3>
+                  <p className="text-xl font-bold text-white mt-1 hidden md:block">Settings</p>
+                </div>
+                <button onClick={() => setShowSettingsModal(false)} className="md:hidden p-2 text-white/40 hover:text-white"><X size={20} /></button>
               </div>
-              <p className="text-[11px] text-white/25">E2EE Protocol • Zero-Log Architecture</p>
-            </div>
+
+              <div className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
+                {[
+                  { id: 'profiles', label: 'Profiles', icon: UserIcon, cat: 'User Settings' },
+                  { id: 'account', label: 'Account', icon: Shield, cat: 'User Settings' },
+                  { id: 'display', label: 'Display', icon: Palette, cat: 'App Settings' },
+                  { id: 'notifications', label: 'Notifications', icon: Bell, cat: 'App Settings' },
+                ].map((item, i, arr) => (
+                  <React.Fragment key={item.id}>
+                    {(i === 0 || item.cat !== arr[i-1].cat) && (
+                      <div className="px-3 pt-4 pb-2 text-[10px] font-bold uppercase tracking-wider text-white/20">{item.cat}</div>
+                    )}
+                    <button 
+                      onClick={() => { setActiveSettingsTab(item.id); setSettingsMobileView('content'); }}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${activeSettingsTab === item.id ? 'bg-white/10 text-white' : 'text-white/40 hover:bg-white/[0.04] hover:text-white/70'}`}
+                    >
+                      <item.icon size={18} />
+                      {item.label}
+                    </button>
+                  </React.Fragment>
+                ))}
+              </div>
+
+              <div className="p-4 mt-auto border-t border-white/5 hidden md:block">
+                <button onClick={onLogout} className="w-full flex items-center gap-3 px-3 py-2.5 text-red-400/60 hover:text-red-400 hover:bg-red-400/5 rounded-lg text-sm font-bold transition-all">
+                  <LogOut size={18} /> Log Out
+                </button>
+              </div>
+            </aside>
+
+            {/* Content Area (Mobile: only shown if view is 'content') */}
+            <main className={`${settingsMobileView === 'content' ? 'flex' : 'hidden'} md:flex flex-col flex-1 min-w-0 bg-transparent safe-top relative`}>
+              {/* Mobile Header */}
+              <div className="md:hidden flex items-center gap-3 px-4 h-14 border-b border-white/5">
+                <button onClick={() => setSettingsMobileView('nav')} className="p-2 -ml-2 text-white/40"><ChevronLeft size={24} /></button>
+                <span className="font-bold text-white uppercase tracking-wider text-xs">{activeSettingsTab}</span>
+              </div>
+
+              <div className="flex-1 overflow-y-auto overscroll-contain px-6 md:px-12 pt-8 md:pt-12 pb-32 discord-scrollbar" style={{ WebkitOverflowScrolling: 'touch' }}>
+                <div className="max-w-2xl mx-auto space-y-12">
+                  
+                  {/* Profiles Tab */}
+                  {activeSettingsTab === 'profiles' && (
+                    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2">
+                       {/* ─── Digital ID Card ─── */}
+                      <section className="space-y-3">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/30 px-1">Network Identity</label>
+                        <div className="relative w-full max-w-[400px] rounded-2xl overflow-hidden bg-[#0f0f11] shadow-2xl group border border-white/10 p-6 flex flex-col items-center">
+                          <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/10 to-transparent pointer-events-none" />
+                          
+                          {/* Top bar with stylized chip */}
+                          <div className="w-full flex justify-between items-center mb-6">
+                            <div className="w-8 h-6 rounded-md bg-gradient-to-tr from-[#FFD700] to-[#B8860B] shadow-[0_0_10px_rgba(255,215,0,0.2)] border border-[#DAA520]" />
+                            <span className="text-[10px] font-mono font-bold tracking-widest text-indigo-400">CIPHER_NODE // SECURE</span>
+                          </div>
+
+                          {/* Avatar Interactive Flip Trigger */}
+                          <div className="relative w-28 h-28 mb-4 border-2 border-white/10 rounded-full bg-[#111214] p-1 shadow-[0_0_20px_rgba(0,0,0,0.5)] cursor-pointer group/avatar">
+                            <div className="w-full h-full bg-[#1e1f24] rounded-full overflow-hidden flex items-center justify-center transition-transform group-hover/avatar:scale-[1.02]">
+                              <CipherMascot className="w-full h-full p-4 text-indigo-400/90" id={profileForm?.avatar_id || me?.avatar_id || 1} />
+                            </div>
+                            {/* Hover prompt */}
+                            <div className="absolute -bottom-2 -right-2 bg-indigo-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-full opacity-0 group-hover/avatar:opacity-100 transition-opacity">
+                              ACCESS
+                            </div>
+                          </div>
+
+                          <div className="text-center space-y-1 w-full">
+                            <h4 className="text-white font-black text-xl tracking-tight">
+                              {profileForm?.display_name || me?.display_name || me?.username}
+                            </h4>
+                            <p className="text-white/40 font-mono text-xs">@{me?.username}</p>
+                          </div>
+
+                          {/* Telemetry Block */}
+                          <div className="mt-8 w-full bg-white/[0.02] border border-white/5 rounded-xl p-4 space-y-3">
+                            <div className="flex justify-between items-center text-xs">
+                              <span className="text-white/30 uppercase font-bold text-[9px] tracking-widest">Node Inception</span>
+                              <span className="text-white/80 font-mono">{new Date(me?.created_at || Date.now()).toLocaleDateString()}</span>
+                            </div>
+                            <div className="flex justify-between items-center text-xs">
+                              <span className="text-white/30 uppercase font-bold text-[9px] tracking-widest">Clearance Level</span>
+                              <span className="text-indigo-400 font-bold">Standard</span>
+                            </div>
+                            {profileForm?.bio && (
+                              <div className="pt-3 border-t border-white/5 text-left">
+                                <span className="text-white/30 uppercase font-bold text-[9px] tracking-widest block mb-1">Bio Data</span>
+                                <p className="text-white/60 text-[11px] leading-relaxed">{profileForm.bio}</p>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Mock Action */}
+                          <button className="mt-6 w-full py-3 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded-xl text-xs font-bold uppercase tracking-widest transition-all">
+                            Transmit Ping
+                          </button>
+                        </div>
+                      </section>
+
+                      {/* ─── Avatar Selection Grid ─── */}
+                      <section className="space-y-3">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/30 px-1">Mascot Selection</label>
+                        <div className="grid grid-cols-4 md:grid-cols-5 gap-3">
+                          {[1,2,3,4,5,6,7,8,9].map(id => (
+                            <button 
+                              key={id}
+                              onClick={() => setProfileForm(p => ({ ...p, avatar_id: id }))}
+                              className={`aspect-square rounded-2xl flex items-center justify-center transition-all duration-300 ${profileForm?.avatar_id === id ? 'bg-indigo-500/20 border-2 border-indigo-500 shadow-[0_0_15px_rgba(99,102,241,0.2)]' : 'bg-black/20 border border-white/5 hover:border-white/20'}`}
+                            >
+                              <CipherMascot className={`w-full h-full p-3 ${profileForm?.avatar_id === id ? 'text-indigo-400' : 'text-white/30'}`} id={id} />
+                            </button>
+                          ))}
+                        </div>
+                      </section>
+
+                      <div className="space-y-6 pt-4 border-t border-white/5">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                          {/* Display Name */}
+                          <section className="space-y-3">
+                            <label className="text-[10px] font-bold uppercase tracking-widest text-white/30 px-1">Display Name</label>
+                            <input 
+                              className="w-full bg-black/20 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-indigo-500/50 transition-all font-medium" 
+                              placeholder="Type a display name..."
+                              value={profileForm?.display_name ?? ''} 
+                              onChange={(e) => setProfileForm(p => ({ ...p, display_name: e.target.value }))}
+                            />
+                            <p className="text-[10px] text-white/20 px-1">This is how you appear to others. Supports spaces and emojis.</p>
+                          </section>
+
+                          {/* Bio */}
+                          <section className="space-y-3">
+                            <label className="text-[10px] font-bold uppercase tracking-widest text-white/30 px-1">About Me</label>
+                            <input 
+                              className="w-full bg-black/20 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-indigo-500/50 transition-all font-medium" 
+                              placeholder="Type your bio..."
+                              value={profileForm?.bio ?? ''} 
+                              onChange={(e) => setProfileForm(p => ({ ...p, bio: e.target.value }))}
+                            />
+                          </section>
+                        </div>
+
+{/* Restricted Username */}
+                        <section className="space-y-3 bg-white/[0.02] p-6 rounded-2xl border border-white/5">
+                          <label className="text-[10px] font-bold uppercase tracking-widest text-white/30 px-1 italic">Identity (Locked)</label>
+                          <div className="flex items-center gap-4">
+                            <div className="flex-1 bg-black/40 border border-white/5 rounded-xl px-4 py-3 text-sm text-white/20 cursor-not-allowed font-mono">
+                              @{me?.username}
+                            </div>
+                            <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-white/20 border border-white/5">
+                              <Lock size={16} />
+                            </div>
+                          </div>
+                          <p className="text-[10px] leading-relaxed text-indigo-400/50 px-1 flex items-center gap-2">
+                            <Info size={12} />
+                            Username changes require verification. Email <span className="text-white/60 underline cursor-pointer hover:text-indigo-300">support@cipher.app</span> to request a change.
+                          </p>
+                        </section>
+
+                        
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                          <section className="space-y-3">
+                            <label className="text-[10px] font-bold uppercase tracking-widest text-white/30 px-1">Status</label>
+                            <div className="relative group">
+                              <select 
+                                className="w-full bg-black/20 border border-white/10 rounded-xl px-3 py-3 text-sm text-white/70 outline-none appearance-none cursor-pointer focus:border-indigo-500/50 transition-all"
+                                value={me?.status || 'online'}
+                                onChange={(e) => handleUpdateProfile({ status: e.target.value })}
+                              >
+                                <option value="online">Online</option>
+                                <option value="idle">Idle</option>
+                                <option value="dnd">Do Not Disturb</option>
+                                <option value="invisible">Invisible</option>
+                              </select>
+                              <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-white/20">
+                                <ChevronLeft size={16} className="-rotate-90" />
+                              </div>
+                            </div>
+                          </section>
+
+                          <section className="space-y-3">
+                            <label className="text-[10px] font-bold uppercase tracking-widest text-white/30 px-1">Recovery Phone (Optional)</label>
+                            <input 
+                              className="w-full bg-black/20 border border-white/10 rounded-xl px-4 py-3 text-sm text-white/70 outline-none focus:border-indigo-500/50 transition-all"
+                              placeholder="+1 (555) 000-0000"
+                              value={me?.recovery_phone || ''}
+                              onChange={(e) => handleUpdateProfile({ recovery_phone: e.target.value })}
+                            />
+                          </section>
+
+                          <section className="space-y-3 lg:col-span-1">
+                            <label className="text-[10px] font-bold uppercase tracking-widest text-white/30 px-1">Recovery Email (Optional)</label>
+                            <input 
+                              className="w-full bg-black/20 border border-white/10 rounded-xl px-4 py-3 text-sm text-white/70 outline-none focus:border-indigo-500/50 transition-all"
+                              placeholder="backup@example.com"
+                              value={me?.recovery_email || ''}
+                              onChange={(e) => handleUpdateProfile({ recovery_email: e.target.value })}
+                            />
+                          </section>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Account Tab */}
+                  {activeSettingsTab === 'account' && (
+                    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2">
+                       <header>
+                        <h2 className="text-2xl font-bold text-white">Account</h2>
+                        <p className="text-sm text-white/40 mt-1">Security and sign-in management.</p>
+                      </header>
+
+                      <section className="bg-red-500/5 border border-red-500/10 rounded-2xl p-6 space-y-4">
+                        <div className="flex items-center gap-3 text-red-400">
+                          <Shield size={20} />
+                          <h4 className="font-bold text-sm">Security Action</h4>
+                        </div>
+                        <p className="text-xs text-red-400/60 leading-relaxed">Changing your password will update your decryption keys. Ensure you remember your new password as it is vital for message access.</p>
+                        
+                        <div className="space-y-4 pt-2">
+                          <input type="password" placeholder="Current Password" 
+                            id="current_pass"
+                            className="w-full bg-black/20 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-red-500/30 transition-all" />
+                          <input type="password" placeholder="New Password" 
+                            id="new_pass"
+                            className="w-full bg-black/20 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-red-500/30 transition-all" />
+                          <button 
+                            onClick={async () => {
+                              const curr = document.getElementById('current_pass').value;
+                              const next = document.getElementById('new_pass').value;
+                              if (!curr || !next) return;
+                              const res = await handleUpdatePassword(curr, next);
+                              if (res.success) alert("Password updated successfully!");
+                              else alert("Failed: " + res.error);
+                            }}
+                            className="w-full bg-red-500/20 hover:bg-red-500 text-red-400 hover:text-white py-3 rounded-xl text-sm font-bold transition-all border border-red-500/20"
+                          >
+                            Update Password
+                          </button>
+                        </div>
+                      </section>
+                    </div>
+                  )}
+
+                  {/* Display Tab */}
+                  {activeSettingsTab === 'display' && (
+                    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2">
+                      <header>
+                        <h2 className="text-2xl font-bold text-white">Appearance</h2>
+                        <p className="text-sm text-white/40 mt-1">Customize your Cipher experience.</p>
+                      </header>
+
+                      <section className="space-y-4">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/30 px-1">Theme</label>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          {[
+                            { id: 'classical', label: 'Classical', color: 'bg-black', border: 'border-white/5' },
+                            { id: 'vibrant', label: 'Vibrant', color: 'bg-[#16161a]', border: 'border-indigo-500/20' },
+                            { id: 'light', label: 'Light', color: 'bg-white', border: 'border-black/5' },
+                          ].map(t => (
+                            <button key={t.id} onClick={() => setTheme(t.id)}
+                              className={`relative h-24 rounded-xl border-2 transition-all overflow-hidden ${t.color} ${theme === t.id ? 'border-indigo-600 scale-[1.02] shadow-xl' : 'border-white/5 hover:border-white/20'}`}>
+                              <div className="absolute inset-0 flex items-center justify-center">
+                                <span className={`text-xs font-bold ${t.id === 'light' ? 'text-black' : 'text-white'}`}>{t.label}</span>
+                              </div>
+                              {theme === t.id && <div className="absolute top-2 right-2 w-4 h-4 bg-indigo-600 rounded-full flex items-center justify-center"><Check size={10} className="text-white" /></div>}
+                            </button>
+                          ))}
+                        </div>
+                      </section>
+                    </div>
+                  )}
+
+                  {/* Notifications Tab */}
+                  {activeSettingsTab === 'notifications' && (
+                    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2">
+                       <header>
+                        <h2 className="text-2xl font-bold text-white">Notifications</h2>
+                        <p className="text-sm text-white/40 mt-1">Control your alerts and audio cues.</p>
+                      </header>
+
+                      <div className="space-y-2">
+                        {[{ key: "messages", label: "Messages" }, { key: "friendRequests", label: "Friend Requests" }, { key: "groupRequests", label: "Group Requests" }, { key: "sounds", label: "Sounds" }].map(r => (
+                          <button key={r.key} onClick={() => setNotificationPrefs(p => ({ ...p, [r.key]: !p[r.key] }))}
+                            className="w-full bg-white/[0.03] rounded-xl px-4 py-4 flex items-center justify-between hover:bg-white/[0.05] transition-colors border border-white/5">
+                            <span className="text-sm font-medium text-white/70">{r.label}</span>
+                            <div className={`w-10 h-6 rounded-full transition-colors relative p-1 ${notificationPrefs[r.key] ? 'bg-indigo-600' : 'bg-white/10'}`}>
+                              <div className={`w-4 h-4 bg-white rounded-full transition-transform ${notificationPrefs[r.key] ? 'translate-x-4' : ''}`} />
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+              </div>
+
+              {/* Desktop Close Button */}
+              <button onClick={() => setShowSettingsModal(false)} className="absolute top-8 right-8 p-2 text-white/20 hover:text-white hover:bg-white/5 rounded-full transition-all hidden md:flex flex-col items-center gap-1 group">
+                <div className="w-10 h-10 rounded-full border border-white/20 flex items-center justify-center group-hover:border-white transition-colors"><X size={20} /></div>
+                <span className="text-[10px] font-bold uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">Esc</span>
+              </button>
+
+              {/* ─── Unsaved Changes HUD (Floating) ─── */}
+              {isProfileDirty && (
+                <div className="absolute bottom-6 left-6 right-6 p-4 bg-[#111214]/90 backdrop-blur-xl border border-indigo-500/30 rounded-2xl flex items-center justify-between shadow-[0_20px_50px_rgba(0,0,0,0.5),0_0_15px_rgba(99,102,241,0.1)] animate-in slide-in-from-bottom-4 duration-300 z-50">
+                  <div className="flex items-center gap-3">
+                    <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse shadow-[0_0_8px_rgba(99,102,241,0.8)]" />
+                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-100/90">Unsaved Data Sequence Tracked</span>
+                  </div>
+                  <div className="flex gap-4 items-center">
+                    <button onClick={() => setProfileForm({
+                        display_name: me.display_name || "",
+                        bio: me.bio || "",
+                        avatar_id: me.avatar_id || 1,
+                        banner_color: me.banner_color || "#4f46e5"
+                      })} className="text-[10px] font-bold uppercase tracking-widest text-white/30 hover:text-white transition-colors">Abort</button>
+                    <button onClick={async (e) => {
+                      const btn = e.currentTarget;
+                      const originalText = btn.innerText;
+                      btn.innerText = "Syncing...";
+                      const res = await handleUpdateProfile(profileForm);
+                      if (res.success) {
+                        btn.innerText = "Synchronized";
+                        btn.style.backgroundColor = "#22c55e"; // green-500
+                        setTimeout(() => {
+                           // isProfileDirty will naturally hide the HUD, but adding safety
+                        }, 500);
+                      } else {
+                        btn.innerText = "Error";
+                        btn.style.backgroundColor = "#ef4444"; // red-500
+                        setTimeout(() => { btn.innerText = originalText; btn.style.backgroundColor = ""; }, 2000);
+                      }
+                    }} className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-[10px] font-black uppercase tracking-[0.15em] shadow-lg shadow-indigo-600/20 transition-all active:scale-95">Commit Protocol</button>
+                  </div>
+                </div>
+              )}
+            </main>
+
           </div>
         </div>
       )}
 
+      {/* ─── User Profile Tactical ID Modal ─── */}
+      {selectedUserForProfile && (() => {
+        const liveProfile = profiles[selectedUserForProfile.id] || selectedUserForProfile;
+        const profileStatus = liveProfile.status || 'online';
+        const isOnline = onlineUsers.has(selectedUserForProfile.id);
+        const statusColor = !isOnline || profileStatus === 'invisible' ? 'bg-white/20' :
+          profileStatus === 'idle' ? 'bg-[#f0b232]' :
+          profileStatus === 'dnd' ? 'bg-[#f23f43]' : 'bg-[#23a55a]';
+        const statusLabel = !isOnline ? 'Offline' :
+          profileStatus === 'idle' ? 'Idle' :
+          profileStatus === 'dnd' ? 'Do Not Disturb' :
+          profileStatus === 'invisible' ? 'Invisible' : 'Online';
+        return (
+        <div className="fixed inset-0 z-[70] bg-black/80 backdrop-blur-xl flex items-center justify-center p-6 animate-in fade-in zoom-in-95 duration-200" onClick={() => setSelectedUserForProfile(null)}>
+          <div className="relative w-full max-w-[400px] rounded-3xl overflow-hidden bg-[#0a0a0c] border border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.8)] flex flex-col items-center p-8 group" onClick={e => e.stopPropagation()}>
+            <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/[0.05] to-transparent pointer-events-none" />
+            
+            {/* Tactical Header */}
+            <div className="w-full flex justify-between items-center mb-8">
+              <div className="px-3 py-1 rounded-full bg-white/5 border border-white/10 flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                <span className="text-[9px] font-mono font-bold tracking-[0.2em] text-white/50 uppercase">Network_Node_{selectedUserForProfile.id?.slice(0,4)}</span>
+              </div>
+              <button onClick={() => setSelectedUserForProfile(null)} className="p-2 text-white/20 hover:text-white transition-colors"><X size={20} /></button>
+            </div>
+
+            {/* Avatar Display */}
+            <div className="relative w-32 h-32 mb-6 border-2 border-white/10 rounded-full bg-[#111214] p-1 shadow-[0_0_30px_rgba(99,102,241,0.15)]">
+              <div className="w-full h-full bg-[#1e1f24] rounded-full overflow-hidden flex items-center justify-center">
+                <CipherMascot className="w-full h-full p-5 text-indigo-400" id={liveProfile.avatar_id || 1} />
+              </div>
+              <div className={`absolute bottom-1 right-1 w-6 h-6 rounded-full border-[3px] border-[#0a0a0c] ${statusColor}`} />
+            </div>
+
+            <div className="text-center space-y-1 w-full mb-8">
+              <h4 className="text-white font-black text-2xl tracking-tight">
+                {liveProfile.display_name || liveProfile.username || selectedUserForProfile.username}
+              </h4>
+              <p className="text-indigo-400 font-mono text-sm">@{selectedUserForProfile.username}</p>
+              <p className="text-[10px] text-white/30 uppercase tracking-widest font-bold flex items-center justify-center gap-1.5 pt-1">
+                <span className={`w-2 h-2 rounded-full ${statusColor}`} />
+                {statusLabel}
+              </p>
+            </div>
+
+            {/* Telemetry Matrix */}
+            <div className="w-full bg-white/[0.03] border border-white/5 rounded-2xl p-5 space-y-4 mb-8">
+              <div className="flex justify-between items-center">
+                <span className="text-white/20 uppercase font-black text-[9px] tracking-[0.2em]">Node Inception</span>
+                <span className="text-white/70 font-mono text-xs">{new Date(selectedUserForProfile.created_at || Date.now()).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+              </div>
+              {(liveProfile.bio || selectedUserForProfile.bio) && (
+                <div className="pt-4 border-t border-white/5">
+                  <span className="text-white/20 uppercase font-black text-[9px] tracking-[0.2em] block mb-2">Neural Bio-Data</span>
+                  <p className="text-white/50 text-[12px] leading-relaxed italic">"{liveProfile.bio || selectedUserForProfile.bio}"</p>
+                </div>
+              )}
+            </div>
+
+            {/* Action Matrix */}
+            {selectedUserForProfile.id !== me?.id ? (
+              friends.some(f => f.id === selectedUserForProfile.id) ? (
+                <button disabled className="w-full py-4 bg-green-500/10 text-green-400 border border-green-500/20 rounded-xl text-xs font-black uppercase tracking-[0.2em] flex items-center justify-center gap-2">
+                  <ShieldCheck size={14} /> Protocol Linked
+                </button>
+              ) : outgoingIds.has(selectedUserForProfile.id) ? (
+                 <button disabled className="w-full py-4 bg-indigo-500/10 text-indigo-400/50 border border-indigo-500/20 rounded-xl text-xs font-black uppercase tracking-[0.2em] flex items-center justify-center gap-2">
+                  <Loader2 size={14} className="animate-spin" /> Uplink Pending
+                </button>
+              ) : incomingIds.has(selectedUserForProfile.id) ? (
+                 <button 
+                   onClick={() => { acceptFriendReq(selectedUserForProfile.id); setSelectedUserForProfile(null); }}
+                   className="w-full py-4 bg-amber-500 hover:bg-amber-400 text-[#0a0a0c] rounded-xl text-xs font-black uppercase tracking-[0.2em] transition-all shadow-lg active:scale-[0.98]"
+                 >
+                  Finalize Uplink
+                </button>
+              ) : (
+                <button 
+                  onClick={() => { sendFriendReq(selectedUserForProfile.id); setSelectedUserForProfile(null); }}
+                  className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-black uppercase tracking-[0.3em] transition-all shadow-lg shadow-indigo-600/20 active:scale-[0.98]"
+                >
+                  Transmit Ping
+                </button>
+              )
+            ) : (
+              <button disabled className="w-full py-4 bg-white/10 text-white/50 border border-white/10 rounded-xl text-xs font-black uppercase tracking-[0.2em]">
+                Identity Authenticated
+              </button>
+            )}
+          </div>
+        </div>
+        );
+      })()}
+
       <style>{`
         .discord-scrollbar::-webkit-scrollbar { width: 6px; }
         .discord-scrollbar::-webkit-scrollbar-track { background: transparent; margin: 4px 0; }
-        .discord-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 3px; }
-        .discord-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.1); }
+        .discord-scrollbar::-webkit-scrollbar-thumb { background: ${theme === 'vibrant' ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)'}; border-radius: 3px; }
+        .discord-scrollbar::-webkit-scrollbar-thumb:hover { background: ${theme === 'vibrant' ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)'}; }
 
         /* Mobile PWA optimizations */
         * { -webkit-tap-highlight-color: transparent; }
         html, body { overscroll-behavior: none; touch-action: pan-y; }
+        .discord-scrollbar { touch-action: pan-y; -webkit-overflow-scrolling: touch; }
         body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
         input, textarea { font-size: 16px !important; } /* Prevents iOS zoom on focus */
         @media (max-width: 768px) {

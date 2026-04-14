@@ -55,31 +55,33 @@ export const api = {
   logout: async () => {
     await supabase.auth.signOut();
   },
-
   users: async (search) => {
-    let query = supabase.from('users').select('id, username');
-    if (search) query = query.ilike('username', `%${search}%`);
+    let query = supabase.from('users').select('id, username, display_name, avatar_id, bio, status, created_at');
+    if (search) query = query.ilike('username', `%${search}%`).or(`display_name.ilike.%${search}%`);
     const { data, error } = await query.limit(40);
     if (error) throw error;
     return { users: data || [] };
   },
-
   friends: async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return { friends: [] };
 
     // Query both directions to handle partial inserts
     const [asUser, asFriend] = await Promise.all([
-      supabase.from('friendships').select('friend_id, u:friend_id(username)').eq('user_id', user.id),
-      supabase.from('friendships').select('user_id, u:user_id(username)').eq('friend_id', user.id)
+      supabase.from('friendships').select('friend_id, u:friend_id(username, display_name, avatar_id, bio, status, created_at)').eq('user_id', user.id),
+      supabase.from('friendships').select('user_id, u:user_id(username, display_name, avatar_id, bio, status, created_at)').eq('friend_id', user.id)
     ]);
 
     const friendMap = new Map();
-    (asUser.data || []).forEach(f => friendMap.set(f.friend_id, f.u?.username || 'Unknown Node'));
-    (asFriend.data || []).forEach(f => friendMap.set(f.user_id, f.u?.username || 'Unknown Node'));
+    (asUser.data || []).forEach(f => {
+      if (f.u) friendMap.set(f.friend_id, { id: f.friend_id, ...f.u });
+    });
+    (asFriend.data || []).forEach(f => {
+      if (f.u) friendMap.set(f.user_id, { id: f.user_id, ...f.u });
+    });
 
     return {
-      friends: Array.from(friendMap.entries()).map(([id, username]) => ({ id, username }))
+      friends: Array.from(friendMap.values())
     };
   },
 
@@ -98,19 +100,23 @@ export const api = {
     if (!user) return { incoming: [], outgoing: [] };
     
     const [incoming, outgoing] = await Promise.all([
-      supabase.from('friend_requests').select('from_user_id, created_at, u:from_user_id(username)').eq('to_user_id', user.id),
-      supabase.from('friend_requests').select('to_user_id, created_at, u:to_user_id(username)').eq('from_user_id', user.id)
+      supabase.from('friend_requests').select('from_user_id, created_at, u:from_user_id(username, display_name, avatar_id)').eq('to_user_id', user.id),
+      supabase.from('friend_requests').select('to_user_id, created_at, u:to_user_id(username, display_name, avatar_id)').eq('from_user_id', user.id)
     ]);
 
     return {
       incoming: (incoming.data || []).map(r => ({
         fromUserId: r.from_user_id,
         username: r.u?.username || 'Unknown',
+        display_name: r.u?.display_name,
+        avatar_id: r.u?.avatar_id,
         createdAt: r.created_at
       })),
       outgoing: (outgoing.data || []).map(r => ({
         toUserId: r.to_user_id,
         username: r.u?.username || 'Unknown',
+        display_name: r.u?.display_name,
+        avatar_id: r.u?.avatar_id,
         createdAt: r.created_at
       }))
     };
@@ -193,7 +199,7 @@ export const api = {
 
     // 2. Fetch only new ones from Supabase
     const { data, error } = await supabase.from('messages')
-      .select('*, u1:sender_id(username), u2:reply_to_id(ciphertext, iv, sender_id(username))')
+      .select('*, u1:sender_id(username, display_name, avatar_id), u2:reply_to_id(ciphertext, iv, sender_id(username, display_name, avatar_id))')
       .eq('chat_id', chatId)
       .gt('created_at', lastTimestamp)
       .order('created_at', { ascending: true });
@@ -251,6 +257,85 @@ export const api = {
     return { ok: true };
   },
 
+  // ─── Media API ───
+
+  uploadMedia: async (encryptedBlob, fileName) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Session expired");
+    const path = `${user.id}/${Date.now()}_${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    const { data, error } = await supabase.storage
+      .from('cipher-media')
+      .upload(path, encryptedBlob, { contentType: 'application/octet-stream', upsert: false });
+    if (error) throw error;
+    return { path: data.path };
+  },
+
+  downloadMedia: async (path) => {
+    const { data, error } = await supabase.storage.from('cipher-media').download(path);
+    if (error) throw error;
+    return data; // Returns a Blob
+  },
+
+  deleteMedia: async (path) => {
+    const { error } = await supabase.storage.from('cipher-media').remove([path]);
+    if (error) console.warn('[Media] Delete failed:', error);
+  },
+
+  sendMediaMessage: async (peerId, payload, mediaInfo, replyToId = null) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Session expired");
+    const chatId = [user.id, peerId].sort().join(':');
+    const msg = {
+      id: crypto.randomUUID(),
+      chat_id: chatId,
+      sender_id: user.id,
+      receiver_id: peerId,
+      ciphertext: payload.ciphertext || '',
+      iv: payload.iv || '',
+      reply_to_id: replyToId,
+      type: mediaInfo.type,           // 'image', 'gif', 'sticker'
+      media_url: mediaInfo.media_url,  // Storage path or external URL
+      media_meta: mediaInfo.media_meta || {},
+      ephemeral: mediaInfo.ephemeral || false
+    };
+    const { error } = await supabase.from('messages').insert(msg);
+    if (error) throw error;
+    const finalMsg = { ...msg, created_at: new Date().toISOString(), timestamp: new Date().toISOString(), senderId: msg.sender_id, receiverId: msg.receiver_id, reactions: {} };
+    await saveMessages([finalMsg]);
+    return { message: finalMsg };
+  },
+
+  sendGroupMediaMessage: async (groupId, payload, mediaInfo, replyToId = null) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Session expired");
+    const msg = {
+      id: crypto.randomUUID(),
+      group_id: groupId,
+      sender_id: user.id,
+      ciphertext: payload.ciphertext || '',
+      iv: payload.iv || '',
+      reply_to_id: replyToId,
+      type: mediaInfo.type,
+      media_url: mediaInfo.media_url,
+      media_meta: mediaInfo.media_meta || {},
+      ephemeral: mediaInfo.ephemeral || false
+    };
+    const { error } = await supabase.from('group_messages').insert(msg);
+    if (error) throw error;
+    const finalMsg = { ...msg, created_at: new Date().toISOString(), timestamp: new Date().toISOString(), senderId: msg.sender_id, reactions: {} };
+    await saveMessages([finalMsg]);
+    return { message: finalMsg };
+  },
+
+  markEphemeralViewed: async (msgId, isGroup = false) => {
+    const table = isGroup ? 'group_messages' : 'messages';
+    const { error } = await supabase.from(table)
+      .update({ viewed_at: new Date().toISOString() })
+      .eq('id', msgId);
+    if (error) console.warn('[Media] Ephemeral mark failed:', error);
+    return { ok: true };
+  },
+
   groupMessages: async (groupId) => {
     // 1. Get from local cache
     const cached = await getCachedMessages(groupId, true);
@@ -258,7 +343,7 @@ export const api = {
 
     // 2. Fetch new ones
     const { data, error } = await supabase.from('group_messages')
-      .select('*, u:sender_id(username), u2:reply_to_id(ciphertext, iv, sender_id(username))')
+      .select('*, u:sender_id(username, display_name, avatar_id), u2:reply_to_id(ciphertext, iv, sender_id(username, display_name, avatar_id))')
       .eq('group_id', groupId)
       .gt('created_at', lastTimestamp)
       .order('created_at', { ascending: true });
@@ -267,8 +352,12 @@ export const api = {
 
     if (data && data.length > 0) {
       const fresh = data.map(m => ({ 
-        ...m, senderUsername: m.u?.username || 'Unknown', timestamp: m.created_at, senderId: m.sender_id,
-        replyTo: m.u2 ? { ciphertext: m.u2.ciphertext, iv: m.u2.iv, senderUsername: m.u2.sender_id?.username } : null
+        ...m, 
+        senderUsername: m.u?.username || 'Unknown', 
+        senderDisplayName: m.u?.display_name,
+        senderAvatarId: m.u?.avatar_id,
+        timestamp: m.created_at, senderId: m.sender_id,
+        replyTo: m.u2 ? { ciphertext: m.u2.ciphertext, iv: m.u2.iv, senderUsername: m.u2.sender_id?.username, senderDisplayName: m.u2.sender_id?.display_name } : null
       }));
       await saveMessages(fresh);
       const all = [...cached, ...fresh];
