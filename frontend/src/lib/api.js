@@ -305,6 +305,22 @@ export const api = {
     return { message: finalMsg };
   },
 
+  deleteMessage: async (msgId, storagePath = null) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Session expired");
+    
+    // 1. Delete from Storage if it's an uploaded file
+    if (storagePath) {
+      await api.deleteMedia(storagePath);
+    }
+    
+    // 2. Delete the message row
+    const { error } = await supabase.from('messages').delete().eq('id', msgId).eq('sender_id', user.id);
+    if (error) throw error;
+    
+    return { ok: true };
+  },
+
   sendGroupMediaMessage: async (groupId, payload, mediaInfo, replyToId = null) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Session expired");
@@ -399,6 +415,20 @@ export const api = {
   reactToGroupMessage: async (msgId, reactionsJson) => {
     const { error } = await supabase.from('group_messages').update({ reactions: reactionsJson }).eq('id', msgId);
     if (error) throw error;
+    return { ok: true };
+  },
+
+  deleteGroupMessage: async (msgId, storagePath = null) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Session expired");
+    
+    if (storagePath) {
+      await api.deleteMedia(storagePath);
+    }
+    
+    const { error } = await supabase.from('group_messages').delete().eq('id', msgId).eq('sender_id', user.id);
+    if (error) throw error;
+    
     return { ok: true };
   },
 

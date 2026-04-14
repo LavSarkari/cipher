@@ -144,6 +144,50 @@ export const decryptFile = async (encryptedData, passphrase, chatId) => {
   return plaintext;
 };
 
+/**
+ * Encrypts a small JSON object (metadata) for database storage
+ */
+export const encryptMetadata = async (data, passphrase, chatId) => {
+  if (!data) return null;
+  const key = await deriveFileKey(passphrase, chatId);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoded = enc.encode(JSON.stringify(data));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    encoded
+  );
+  
+  // Return as an object that can be stored in JSONB or as a string
+  return {
+    ct: btoa(String.fromCharCode(...new Uint8Array(ciphertext))),
+    iv: btoa(String.fromCharCode(...iv))
+  };
+};
+
+/**
+ * Decrypts metadata from its encrypted object form
+ */
+export const decryptMetadata = async (encrypted, passphrase, chatId) => {
+  if (!encrypted || !encrypted.ct || !encrypted.iv) return encrypted; // Not encrypted or missing parts
+  try {
+    const key = await deriveFileKey(passphrase, chatId);
+    const iv = Uint8Array.from(atob(encrypted.iv), c => c.charCodeAt(0));
+    const ct = Uint8Array.from(atob(encrypted.ct), c => c.charCodeAt(0));
+    
+    const decrypted = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv },
+      key,
+      ct
+    );
+    
+    return JSON.parse(new TextDecoder().decode(decrypted));
+  } catch (e) {
+    console.error('[Media] Metadata decryption failed:', e);
+    return null;
+  }
+};
+
 // ─── Full Media Processing Pipeline ───
 // Takes a raw file, compresses, generates thumbnail, encrypts
 export const processMediaForUpload = async (file, passphrase, chatId) => {
@@ -190,7 +234,7 @@ export const formatFileSize = (bytes) => {
 
 // ─── Giphy Search (Free Tier) ───
 // Using a common public beta key. If this fails, users should get their own from developers.giphy.com
-const GIPHY_API_KEY = 'L8scy9Y9m0u2I6L56u45v0Sj'; 
+const GIPHY_API_KEY = 't0wdUHXYwPRhJEUeujITcgY0wBz4GyKC'; 
 const GIPHY_BASE  = 'https://api.giphy.com/v1';
 
 export const searchGifs = async (query, limit = 20) => {
@@ -241,14 +285,14 @@ export const searchStickers = async (query, limit = 20) => {
 };
 
 // ─── Cipher Original Stickers (3D Premium Assets) ───
-// Using high-quality 3D renders from the 3dicons.co open-source set
+// Using high-quality 3D renders from the Microsoft Fluent Emoji set
 export const CIPHER_STICKERS = [
-  { id: 'c3d_ghost', name: 'Phantom', url: 'https://raw.githubusercontent.com/Khushit-Shah/Cipher-Assets/main/ghost-3d.png', emoji: '👻' },
-  { id: 'c3d_heart', name: 'Pulse', url: 'https://raw.githubusercontent.com/Khushit-Shah/Cipher-Assets/main/heart-3d.png', emoji: '❤️' },
-  { id: 'c3d_rocket', name: 'Blast', url: 'https://raw.githubusercontent.com/Khushit-Shah/Cipher-Assets/main/rocket-3d.png', emoji: '🚀' },
-  { id: 'c3d_skull', name: 'Doom', url: 'https://raw.githubusercontent.com/Khushit-Shah/Cipher-Assets/main/skull-3d.png', emoji: '💀' },
-  { id: 'c3d_fire', name: 'Ignite', url: 'https://raw.githubusercontent.com/Khushit-Shah/Cipher-Assets/main/fire-3d.png', emoji: '🔥' },
-  { id: 'c3d_crown', name: 'Elite', url: 'https://raw.githubusercontent.com/Khushit-Shah/Cipher-Assets/main/crown-3d.png', emoji: '👑' },
-  { id: 'c3d_shield', name: 'Secure', url: 'https://raw.githubusercontent.com/Khushit-Shah/Cipher-Assets/main/shield-3d.png', emoji: '🛡️' },
-  { id: 'c3d_lock', name: 'Cipher', url: 'https://raw.githubusercontent.com/Khushit-Shah/Cipher-Assets/main/lock-3d.png', emoji: '🔒' },
+  { id: 'c3d_ghost', name: 'Phantom', url: 'https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets/Ghost/3D/ghost_3d.png', emoji: '👻' },
+  { id: 'c3d_heart', name: 'Pulse', url: 'https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets/Red%20heart/3D/red_heart_3d.png', emoji: '❤️' },
+  { id: 'c3d_rocket', name: 'Blast', url: 'https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets/Rocket/3D/rocket_3d.png', emoji: '🚀' },
+  { id: 'c3d_skull', name: 'Doom', url: 'https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets/Skull/3D/skull_3d.png', emoji: '💀' },
+  { id: 'c3d_fire', name: 'Ignite', url: 'https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets/Fire/3D/fire_3d.png', emoji: '🔥' },
+  { id: 'c3d_crown', name: 'Elite', url: 'https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets/Crown/3D/crown_3d.png', emoji: '👑' },
+  { id: 'c3d_shield', name: 'Secure', url: 'https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets/Shield/3D/shield_3d.png', emoji: '🛡️' },
+  { id: 'c3d_lock', name: 'Cipher', url: 'https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets/Locked/3D/locked_3d.png', emoji: '🔒' },
 ];
