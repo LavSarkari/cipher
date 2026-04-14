@@ -194,6 +194,7 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
   useEffect(() => {
     setRawMessages([]); setMessages([]); setIsUnlocked(false); setChatKey(""); setInput("");
     decryptCache.current.clear();
+    isInitialScrollDone.current = false;
   }, [activeChat.id]);
 
   useEffect(() => {
@@ -282,7 +283,11 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
   useEffect(() => {
     if (scrollRef.current) {
       const el = scrollRef.current;
-      if (el.scrollHeight - el.scrollTop - el.clientHeight < 150) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
+      if (!isInitialScrollDone.current || isNearBottom) {
+        el.scrollTo({ top: el.scrollHeight, behavior: isInitialScrollDone.current ? "smooth" : "auto" });
+        if (messages.length > 0) isInitialScrollDone.current = true;
+      }
     }
   }, [messages]);
 
@@ -434,7 +439,8 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
         )}
         <form onSubmit={send} className={`bg-white/[0.04] rounded-xl px-3 md:px-4 flex items-center border ${replyTo || editingMsg ? 'border-t-0 rounded-t-none' : 'border-white/[0.06]'} focus-within:border-white/10 transition-colors`}>
           {!isUnlocked && <button type="button" onClick={() => setShowKey(true)} className="p-2.5 -ml-1 text-amber-500 active:text-amber-400"><Lock size={20} /></button>}
-          <input ref={inputRef} disabled={!isUnlocked || isSending} autoComplete="off"
+          <input ref={inputRef} disabled={!isUnlocked || isSending} 
+            autoComplete="one-time-code" name="message_body"
             spellCheck="false" autoCorrect="off" autoCapitalize="off"
             className="flex-1 bg-transparent py-3.5 text-[16px] md:text-[15px] outline-none text-white/80 placeholder:text-white/20 disabled:opacity-30"
             placeholder={isUnlocked ? `Message @${activeChat.username}` : "Tap 🔑 to unlock"} value={input} onChange={(e) => setInput(e.target.value)} />
@@ -472,9 +478,14 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
   const [addingId, setAddingId] = useState("");
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
+  const isInitialScrollDone = useRef(false);
   const chatId = useMemo(() => groupChatIdFor(activeGroup.id), [activeGroup.id]);
 
-  useEffect(() => { setRawMessages([]); setMessages([]); setIsUnlocked(false); setChatKey(""); setInput(""); decryptCache.current.clear(); }, [activeGroup.id]);
+  useEffect(() => {
+    setRawMessages([]); setMessages([]); setIsUnlocked(false); setChatKey(""); setInput(""); 
+    decryptCache.current.clear(); 
+    isInitialScrollDone.current = false;
+  }, [activeGroup.id]);
 
   useEffect(() => {
     let stopped = false;
@@ -568,7 +579,16 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
     })();
   }, [rawMessages, isUnlocked, chatKey, chatId]);
 
-  useEffect(() => { if (scrollRef.current) { const el = scrollRef.current; if (el.scrollHeight - el.scrollTop - el.clientHeight < 150) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" }); } }, [messages]);
+  useEffect(() => {
+    if (scrollRef.current) {
+      const el = scrollRef.current;
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
+      if (!isInitialScrollDone.current || isNearBottom) {
+        el.scrollTo({ top: el.scrollHeight, behavior: isInitialScrollDone.current ? "smooth" : "auto" });
+        if (messages.length > 0) isInitialScrollDone.current = true;
+      }
+    }
+  }, [messages]);
 
   const send = async (e) => {
     e.preventDefault();
@@ -696,7 +716,8 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
         )}
         <form onSubmit={send} className={`bg-white/[0.04] rounded-xl px-3 md:px-4 flex items-center border ${replyTo || editingMsg ? 'border-t-0 rounded-t-none' : 'border-white/[0.06]'} focus-within:border-white/10 transition-colors`}>
           {!isUnlocked && <button type="button" onClick={() => setShowKey(true)} className="p-2 -ml-1 text-amber-500"><Lock size={18} /></button>}
-          <input ref={inputRef} disabled={!isUnlocked || isSending} autoComplete="off"
+          <input ref={inputRef} disabled={!isUnlocked || isSending} 
+            autoComplete="one-time-code" name="group_message_body"
             spellCheck="false" autoCorrect="off" autoCapitalize="off"
             className="flex-1 bg-transparent py-3 text-[15px] outline-none text-white/80 placeholder:text-white/20 disabled:opacity-30"
             placeholder={isUnlocked ? `Message #${activeGroup.name}` : "Enter passkey to unlock"} value={input} onChange={(e) => setInput(e.target.value)} />
