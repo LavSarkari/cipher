@@ -142,3 +142,8 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- 6. ENABLE REALTIME
+-- This tells Supabase to broadcast changes from these tables to the frontend
+alter publication supabase_realtime add table public.messages;
+alter publication supabase_realtime add table public.group_messages;
