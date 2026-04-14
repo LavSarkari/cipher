@@ -368,7 +368,8 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
       const res = await api.sendMessage(activeChat.id, payload, replyTo?.id);
       console.log("[Chat] Message sent successfully:", res.message.id);
       addMessage(res.message);
-      setInput(""); setReplyTo(null); inputRef.current?.focus();
+      setInput(""); setReplyTo(null); 
+      setTimeout(() => inputRef.current?.focus(), 50);
     } catch (err) { 
       console.error("[Chat] Send failed:", err);
       alert("Failed: " + (err.message || "Unknown error")); 
@@ -402,14 +403,20 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
   const handleReply = (msg) => { 
     if (msg?.openKeyPrompt) { setShowKey(true); return; }
     setReplyTo(msg); 
-    inputRef.current?.focus(); 
+    setTimeout(() => inputRef.current?.focus(), 50);
   };
   const handleEdit = (msg) => { 
     if (!isUnlocked) { setShowKey(true); return; }
     setEditingMsg(msg); 
     setInput(msg.plaintext || ""); 
-    inputRef.current?.focus(); 
+    setTimeout(() => inputRef.current?.focus(), 50);
   };
+
+  useEffect(() => {
+    if (isUnlocked && activeChat) {
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  }, [isUnlocked, activeChat?.id]);
 
 
 
@@ -599,14 +606,20 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
   const handleReply = (msg) => { 
     if (msg?.openKeyPrompt) { setShowKey(true); return; }
     setReplyTo(msg); 
-    inputRef.current?.focus(); 
+    setTimeout(() => inputRef.current?.focus(), 50);
   };
   const handleEdit = (msg) => { 
     if (!isUnlocked) { setShowKey(true); return; }
     setEditingMsg(msg); 
     setInput(msg.plaintext || ""); 
-    inputRef.current?.focus(); 
+    setTimeout(() => inputRef.current?.focus(), 50);
   };
+
+  useEffect(() => {
+    if (isUnlocked && activeGroup) {
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  }, [isUnlocked, activeGroup?.id]);
 
   useEffect(() => {
     sendTypingEvent(input.length > 0);
@@ -683,7 +696,8 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
       const res = await api.sendGroupMessage(activeGroup.id, payload, replyTo?.id);
       console.log("[Group] Message sent successfully:", res.message.id);
       addMessage({ ...res.message, senderUsername: me.username });
-      setInput(""); setReplyTo(null); inputRef.current?.focus();
+      setInput(""); setReplyTo(null); 
+      setTimeout(() => inputRef.current?.focus(), 50);
     } catch (err) {
       console.error("[Group] Send failed:", err);
       alert("Group send failed: " + (err.message || "Check friendship or membership"));
