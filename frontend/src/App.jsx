@@ -212,19 +212,30 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
     return () => { stopped = true; };
   }, [activeChat.id, activeChat.isAI, me?.id]);
 
-  useMessageListener(chatId, false, useCallback((payload) => {
-    if (payload.eventType === 'INSERT') {
-      const m = payload.new;
+  const addMessage = useCallback((m) => {
+    setRawMessages(prev => {
+      if (prev.find(x => x.id === m.id)) {
+        console.log("[Chat] Deduplicated message arrival:", m.id);
+        return prev;
+      }
       const formatted = { 
-        ...m, timestamp: m.created_at, senderId: m.sender_id, receiverId: m.receiver_id,
+        ...m, 
+        timestamp: m.timestamp || m.created_at, 
+        senderId: m.senderId || m.sender_id, 
+        receiverId: m.receiverId || m.receiver_id,
         reactions: m.reactions || {}
       };
-      setRawMessages(prev => {
-        if (prev.find(x => x.id === m.id)) return prev;
-        const next = [...prev, formatted];
-        saveMessages([formatted]); // Also cache the real-time arrival
-        return next;
-      });
+      console.log("[Chat] State update: adding message", m.id, "Total in state:", prev.length + 1);
+      const next = [...prev, formatted];
+      saveMessages([formatted]);
+      return next;
+    });
+  }, []);
+
+  useMessageListener(chatId, false, useCallback((payload) => {
+    if (payload.eventType === 'INSERT') {
+      console.log("[Chat] Realtime INSERT received:", payload.new.id);
+      addMessage(payload.new);
     } else if (payload.eventType === 'UPDATE') {
       const m = payload.new;
       setRawMessages(prev => prev.map(x => x.id === m.id ? { ...x, ...m, timestamp: m.created_at } : x));
@@ -232,7 +243,7 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
     } else if (payload.eventType === 'DELETE') {
       setRawMessages(prev => prev.filter(x => x.id !== payload.old.id));
     }
-  }, [me?.id, chatId]));
+  }, [addMessage]));
 
   const { typingUsers, sendTypingEvent } = useTypingIndicator(chatId, me);
   const [contextMenu, setContextMenu] = useState(null);
@@ -294,11 +305,11 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
 
       if (activeChat.isAI) {
         const now = Date.now();
-        setRawMessages(prev => [...prev, { id: `local_${now}`, senderId: me.id, receiverId: AI_USER.id, ...payload, timestamp: now }]);
+        addMessage({ id: `local_${now}`, senderId: me.id, receiverId: AI_USER.id, ...payload, timestamp: now });
         setInput(""); setIsSending(false); inputRef.current?.focus();
         setTimeout(async () => {
           const aiP = await encryptMessage({ plaintext: "AI relay active. Secure channel received.", passphrase: chatKey, chatId });
-          setRawMessages(prev => { const next = [...prev, { id: `local_${Date.now()}`, senderId: AI_USER.id, receiverId: me.id, ...aiP, timestamp: Date.now() }]; localStorage.setItem(`cipher_ai_${me.id}`, JSON.stringify(next)); return next; });
+          addMessage({ id: `local_${Date.now()}`, senderId: AI_USER.id, receiverId: me.id, ...aiP, timestamp: Date.now() });
         }, 1000 + Math.random() * 1000);
         return;
       }
@@ -306,7 +317,7 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
       console.log("[Chat] Sending message...", { chatId, peerId: activeChat.id });
       const res = await api.sendMessage(activeChat.id, payload, replyTo?.id);
       console.log("[Chat] Message sent successfully:", res.message.id);
-      setRawMessages(prev => [...prev, res.message]);
+      addMessage(res.message);
       setInput(""); setReplyTo(null); inputRef.current?.focus();
     } catch (err) { 
       console.error("[Chat] Send failed:", err);
@@ -477,20 +488,28 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
     return () => { stopped = true; };
   }, [activeGroup.id]);
 
+  const addMessage = useCallback((m) => {
+    setRawMessages(prev => {
+      if (prev.find(x => x.id === m.id)) {
+        console.log("[Group] Deduplicated message arrival:", m.id);
+        return prev;
+      }
+      const formatted = { 
+        ...m, 
+        timestamp: m.timestamp || m.created_at, 
+        senderId: m.senderId || m.sender_id, 
+        reactions: m.reactions || {},
+        senderUsername: m.senderUsername || m.u?.username || 'Member'
+      };
+      console.log("[Group] State update: adding message", m.id, "Total in state:", prev.length + 1);
+      const next = [...prev, formatted];
+      saveMessages([formatted]);
+      return next;
+    });
+  }, []);
+
   useMessageListener(activeGroup.id, true, useCallback((payload) => {
     if (payload.eventType === 'INSERT') {
-      const m = payload.new;
-      const formatted = { 
-        ...m, timestamp: m.created_at, senderId: m.sender_id, reactions: m.reactions || {}
-      };
-      setRawMessages(prev => {
-        if (prev.find(x => x.id === m.id)) return prev;
-        const next = [...prev, formatted];
-        saveMessages([formatted]);
-        return next;
-      });
-    } else if (payload.eventType === 'UPDATE') {
-      const m = payload.new;
       setRawMessages(prev => prev.map(x => x.id === m.id ? { ...x, ...m, timestamp: m.created_at } : x));
       saveMessages([{ ...m, timestamp: m.created_at }]);
     } else if (payload.eventType === 'DELETE') {
@@ -527,7 +546,12 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
 
   useEffect(() => {
     (async () => {
-      if (!isUnlocked || !chatKey) { setMessages(rawMessages.map(m => ({ ...m, plaintext: null }))); return; }
+      if (!isUnlocked || !chatKey) { 
+        setMessages(rawMessages.map(m => ({ ...m, plaintext: null }))); 
+        return; 
+      }
+      
+      console.log("[Chat] Processing decryption for", rawMessages.length, "messages");
       const resolved = await Promise.all(rawMessages.map(async (m) => {
         const cached = decryptCache.current.get(m.id);
         if (cached !== undefined) return { ...m, plaintext: cached };
@@ -535,7 +559,8 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
           const pt = await decryptMessage({ ciphertext: m.ciphertext, iv: m.iv, passphrase: chatKey, chatId });
           decryptCache.current.set(m.id, pt);
           return { ...m, plaintext: pt };
-        } catch {
+        } catch (err) {
+          console.warn("[Chat] Decryption failed for message", m.id, err);
           return { ...m, plaintext: null };
         }
       }));
@@ -564,7 +589,7 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
       console.log("[Group] Sending message...", { groupId: activeGroup.id });
       const res = await api.sendGroupMessage(activeGroup.id, payload, replyTo?.id);
       console.log("[Group] Message sent successfully:", res.message.id);
-      setRawMessages(prev => [...prev, { ...res.message, senderUsername: me.username }]);
+      addMessage({ ...res.message, senderUsername: me.username });
       setInput(""); setReplyTo(null); inputRef.current?.focus();
     } catch (err) {
       console.error("[Group] Send failed:", err);
