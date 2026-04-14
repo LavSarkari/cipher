@@ -119,15 +119,15 @@ const SharedMessageItem = ({ msg, isFirst, groupItem, me, isUnlocked, onContextM
   const replyBanner = msg.replyTo && (
     <div 
       onClick={(e) => { e.stopPropagation(); document.getElementById(`msg-${msg.reply_to_id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}
-      className="flex items-center gap-1.5 text-[12px] text-white/35 mb-1.5 ml-[52px] md:ml-[56px] mr-4 truncate relative group/reply cursor-pointer hover:text-white/50 transition-colors"
+      className="flex items-center gap-1.5 text-[12px] text-white/35 mb-2 ml-[52px] md:ml-[56px] mr-4 relative group/reply cursor-pointer hover:text-white/50 transition-colors"
     >
-      <div className="absolute -left-7 top-[10px] w-6 h-4 border-l-2 border-t-2 border-white/10 rounded-tl-lg" />
-      <div className="w-4 h-4 rounded-full bg-white/5 flex items-center justify-center text-[8px] font-bold text-white/40 flex-shrink-0">
+      <div className="absolute -left-8 md:-left-9 top-[10px] w-6 md:w-8 h-4 border-l-2 border-t-2 border-white/20 rounded-tl-[8px] pointer-events-none" />
+      <div className="w-4 h-4 rounded-full bg-white/10 flex items-center justify-center text-[8px] font-bold text-white/40 flex-shrink-0">
         {msg.replyTo.senderUsername?.[0]?.toUpperCase() || '?'}
       </div>
       <span className="font-bold text-white/50 hover:underline">@{msg.replyTo.senderUsername}</span>
-      <span className="truncate italic">
-        {isUnlocked && msg.replyTo.plaintext ? msg.replyTo.plaintext : "Replied to an encrypted message"}
+      <span className="truncate italic max-w-[400px]">
+        {isUnlocked && msg.replyTo.plaintext ? msg.replyTo.plaintext : (msg.replyTo.plaintext === null ? "Decryption failed" : "Replied to an encrypted message")}
       </span>
     </div>
   );
@@ -228,6 +228,7 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
         console.log("[Chat] Deduplicated message arrival:", m.id);
         return prev;
       }
+      
       const formatted = { 
         ...m, 
         timestamp: m.timestamp || m.created_at, 
@@ -235,12 +236,26 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
         receiverId: m.receiverId || m.receiver_id,
         reactions: m.reactions || {}
       };
+
+      // Stitch reply context if missing but we have the ID
+      if (formatted.reply_to_id && !formatted.replyTo) {
+        const original = prev.find(x => x.id === formatted.reply_to_id);
+        if (original) {
+          formatted.replyTo = { 
+            ciphertext: original.ciphertext, 
+            iv: original.iv, 
+            senderUsername: original.senderId === me.id ? me.username : activeChat.username,
+            plaintext: original.plaintext // Might already be decrypted in cache
+          };
+        }
+      }
+
       console.log("[Chat] State update: adding message", m.id, "Total in state:", prev.length + 1);
       const next = [...prev, formatted];
       saveMessages([formatted]);
       return next;
     });
-  }, []);
+  }, [me?.id, me?.username, activeChat?.username]);
 
   useMessageListener(chatId, false, useCallback((payload) => {
     if (payload.eventType === 'INSERT') {
@@ -371,9 +386,11 @@ const ChatPanel = ({ activeChat, me, onRemoveFriend, onBack }) => {
     } catch (err) { console.error("Reaction failed"); }
   };
 
-  const handleContextMenu = (e, msg) => {
+  const handleContextMenu = (e, msg, extra = {}) => {
     e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY, msg, isOwn: msg.senderId === me.id });
+    const x = e.clientX || extra.touchX || 0;
+    const y = e.clientY || extra.touchY || 0;
+    setContextMenu({ x, y, msg, isOwn: extra.isOwn ?? (msg.senderId === me.id) });
   };
 
   const handleReply = (msg) => { 
@@ -536,6 +553,19 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
         reactions: m.reactions || {},
         senderUsername: m.senderUsername || m.u?.username || 'Member'
       };
+
+      if (formatted.reply_to_id && !formatted.replyTo) {
+        const original = prev.find(x => x.id === formatted.reply_to_id);
+        if (original) {
+          formatted.replyTo = { 
+            ciphertext: original.ciphertext, 
+            iv: original.iv, 
+            senderUsername: original.senderUsername || original.u?.username || 'Member',
+            plaintext: original.plaintext
+          };
+        }
+      }
+
       console.log("[Group] State update: adding message", m.id, "Total in state:", prev.length + 1);
       const next = [...prev, formatted];
       saveMessages([formatted]);
@@ -545,12 +575,15 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
 
   useMessageListener(activeGroup.id, true, useCallback((payload) => {
     if (payload.eventType === 'INSERT') {
+      addMessage(payload.new);
+    } else if (payload.eventType === 'UPDATE') {
+      const m = payload.new;
       setRawMessages(prev => prev.map(x => x.id === m.id ? { ...x, ...m, timestamp: m.created_at } : x));
       saveMessages([{ ...m, timestamp: m.created_at }]);
     } else if (payload.eventType === 'DELETE') {
       setRawMessages(prev => prev.filter(x => x.id !== payload.old.id));
     }
-  }, [activeGroup.id]));
+  }, [activeGroup.id, addMessage]));
 
   const { typingUsers, sendTypingEvent } = useTypingIndicator(chatId, me);
   const [contextMenu, setContextMenu] = useState(null);
@@ -669,7 +702,9 @@ const GroupChatPanel = ({ activeGroup, me, onBack, onExitGroup }) => {
 
   const handleContextMenu = (e, msg, extra = {}) => {
     e.preventDefault();
-    setContextMenu({ x: extra.touchX || e.clientX, y: extra.touchY || e.clientY, msg, isOwn: extra.isOwn });
+    const x = e.clientX || extra.touchX || 0;
+    const y = e.clientY || extra.touchY || 0;
+    setContextMenu({ x, y, msg, isOwn: extra.isOwn ?? (msg.sender_id === me.id) });
   };
 
   const openAddFriend = async () => {
